@@ -40,6 +40,10 @@ keep_alive()
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='%', intents=intents, help_command=None)
 
+# Spam protection settings
+SPAM_CHANNEL_ID = 1158615333289086997  # channel where spam is allowed (very reduced XP)
+# Track last message per (guild, channel) to detect consecutive duplicates
+LAST_USER_MESSAGE = {}  # key: (guild_id, channel_id) -> {'author_id': int, 'content': str}
 
 # Database setup with proper table creation and versioning
 def backup_database():
@@ -524,24 +528,61 @@ async def on_message(message):
     if not user_data:
         user_data = create_default_user(message.author.id, message.guild.id)
 
-    unique_words = count_unique_words(message.content)
+    # Prepare cleaned words list (counts total words, not just unique)
+    txt = re.sub(r'http\S+', '', message.content or '')
+    txt = re.sub(r'<@!?\d+>', '', txt)
+    txt = re.sub(r'[^\w\s]', ' ', txt)
+    words_list = re.findall(r'\b[a-zA-Z]{2,}\b', txt.lower())
+    total_words = len(words_list)
 
-    if unique_words >= 2:
-        user_data['unique_words'] += unique_words
-        user_data['lifetime_words'] += unique_words
-        user_data['messages_sent'] += 1
+    # Only consider messages with at least 2 words
+    if total_words >= 2:
+        # XP counts use first 50 words only
+        xp_word_count = min(50, total_words)
+        unique_words = len(set(words_list))
 
+        # Normalize content for duplicate detection
+        normalized = ' '.join((message.content or '').split()).strip().lower()
+        key = (message.guild.id if message.guild else None, message.channel.id)
+        last = LAST_USER_MESSAGE.get(key)
+        is_consecutive_duplicate = last and last.get('author_id') == message.author.id and last.get('content') == normalized
+
+        # Update last message record for this channel
+        LAST_USER_MESSAGE[key] = {'author_id': message.author.id, 'content': normalized}
+
+        # If it's a consecutive duplicate outside spam channel => punish (deduct XP by removing equivalent lifetime words)
+        if is_consecutive_duplicate and message.channel.id != SPAM_CHANNEL_ID:
+            # Deduct the XP equivalent by subtracting lifetime words (10 XP per word -> 1 word = 10 XP)
+            user_data['lifetime_words'] = user_data.get('lifetime_words', 0) - xp_word_count
+            # Still count the message as a message for stats
+            user_data['messages_sent'] += 1
+        else:
+            # Normal or spam-channel message: update stats
+            user_data['messages_sent'] += 1
+            # Keep unique words tracking (used by quests)
+            user_data['unique_words'] += unique_words
+
+            # If this is the spam channel, award heavily reduced XP: 1 XP per 100 words (so add to xp directly)
+            if message.channel.id == SPAM_CHANNEL_ID:
+                spam_xp = xp_word_count // 100  # integer division: 1 XP per 100 words
+                if spam_xp:
+                    user_data['xp'] = user_data.get('xp', 0) + spam_xp
+            else:
+                # For regular channels, add xp via lifetime_words (10 XP per word)
+                user_data['lifetime_words'] = user_data.get('lifetime_words', 0) + xp_word_count
+
+        # Track channel usage
         conn = get_db_connection()
         c = conn.cursor()
         c.execute(
             '''SELECT 1 FROM user_channels 
                      WHERE user_id = ? AND guild_id = ? AND channel_id = ?''',
-            (message.author.id, message.guild.id, message.channel.id))
+            (message.author.id, message.guild.id if message.guild else None, message.channel.id))
         if not c.fetchone():
             c.execute(
                 '''INSERT INTO user_channels (user_id, guild_id, channel_id)
                          VALUES (?, ?, ?)''',
-                (message.author.id, message.guild.id, message.channel.id))
+                (message.author.id, message.guild.id if message.guild else None, message.channel.id))
             user_data['channels_used'] += 1
         conn.commit()
         conn.close()
@@ -558,10 +599,11 @@ async def on_message(message):
     
     # Update daily and weekly quest stats
     is_reply = 1 if message.reference else 0
+    # Use unique_words for quest progress reporting, but cap for XP was applied above
     update_daily_stats(message.author.id, message.guild.id, 
-                      messages=1, words=unique_words, replies=is_reply)
+                      messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0), replies=is_reply)
     update_weekly_stats(message.author.id, message.guild.id,
-                       messages=1, words=unique_words)
+                       messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0))
     
     # Check for expired unclaimed quests and auto-collect at 10%
     from quest_system import collect_expired_quests
@@ -1950,24 +1992,61 @@ async def on_message(message):
     if not user_data:
         user_data = create_default_user(message.author.id, message.guild.id)
 
-    unique_words = count_unique_words(message.content)
+    # Prepare cleaned words list (counts total words, not just unique)
+    txt = re.sub(r'http\S+', '', message.content or '')
+    txt = re.sub(r'<@!?\d+>', '', txt)
+    txt = re.sub(r'[^\w\s]', ' ', txt)
+    words_list = re.findall(r'\b[a-zA-Z]{2,}\b', txt.lower())
+    total_words = len(words_list)
 
-    if unique_words >= 2:
-        user_data['unique_words'] += unique_words
-        user_data['lifetime_words'] += unique_words
-        user_data['messages_sent'] += 1
+    # Only consider messages with at least 2 words
+    if total_words >= 2:
+        # XP counts use first 50 words only
+        xp_word_count = min(50, total_words)
+        unique_words = len(set(words_list))
 
+        # Normalize content for duplicate detection
+        normalized = ' '.join((message.content or '').split()).strip().lower()
+        key = (message.guild.id if message.guild else None, message.channel.id)
+        last = LAST_USER_MESSAGE.get(key)
+        is_consecutive_duplicate = last and last.get('author_id') == message.author.id and last.get('content') == normalized
+
+        # Update last message record for this channel
+        LAST_USER_MESSAGE[key] = {'author_id': message.author.id, 'content': normalized}
+
+        # If it's a consecutive duplicate outside spam channel => punish (deduct XP by removing equivalent lifetime words)
+        if is_consecutive_duplicate and message.channel.id != SPAM_CHANNEL_ID:
+            # Deduct the XP equivalent by subtracting lifetime words (10 XP per word -> 1 word = 10 XP)
+            user_data['lifetime_words'] = user_data.get('lifetime_words', 0) - xp_word_count
+            # Still count the message as a message for stats
+            user_data['messages_sent'] += 1
+        else:
+            # Normal or spam-channel message: update stats
+            user_data['messages_sent'] += 1
+            # Keep unique words tracking (used by quests)
+            user_data['unique_words'] += unique_words
+
+            # If this is the spam channel, award heavily reduced XP: 1 XP per 100 words (so add to xp directly)
+            if message.channel.id == SPAM_CHANNEL_ID:
+                spam_xp = xp_word_count // 100  # integer division: 1 XP per 100 words
+                if spam_xp:
+                    user_data['xp'] = user_data.get('xp', 0) + spam_xp
+            else:
+                # For regular channels, add xp via lifetime_words (10 XP per word)
+                user_data['lifetime_words'] = user_data.get('lifetime_words', 0) + xp_word_count
+
+        # Track channel usage
         conn = get_db_connection()
         c = conn.cursor()
         c.execute(
             '''SELECT 1 FROM user_channels 
                      WHERE user_id = ? AND guild_id = ? AND channel_id = ?''',
-            (message.author.id, message.guild.id, message.channel.id))
+            (message.author.id, message.guild.id if message.guild else None, message.channel.id))
         if not c.fetchone():
             c.execute(
                 '''INSERT INTO user_channels (user_id, guild_id, channel_id)
                          VALUES (?, ?, ?)''',
-                (message.author.id, message.guild.id, message.channel.id))
+                (message.author.id, message.guild.id if message.guild else None, message.channel.id))
             user_data['channels_used'] += 1
         conn.commit()
         conn.close()
@@ -1984,10 +2063,11 @@ async def on_message(message):
     
     # Update daily and weekly quest stats
     is_reply = 1 if message.reference else 0
+    # Use unique_words for quest progress reporting, but cap for XP was applied above
     update_daily_stats(message.author.id, message.guild.id, 
-                      messages=1, words=unique_words, replies=is_reply)
+                      messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0), replies=is_reply)
     update_weekly_stats(message.author.id, message.guild.id,
-                       messages=1, words=unique_words)
+                       messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0))
     
     # Check for expired unclaimed quests and auto-collect at 10% SILENTLY
     from quest_system import collect_expired_quests
