@@ -14,6 +14,9 @@ from quest_system import (
     reset_weekly_quests
 )
 
+# Bot version - Update this when making changes
+VERSION = "2.5.0"
+
 # Flask app for uptime monitoring
 app = Flask('')
 
@@ -504,10 +507,14 @@ def create_default_user(user_id: int, guild_id: int) -> Dict:
 # Bot events
 @bot.event
 async def on_ready():
-    print(f'🚀 Questuza is online! Logged in as {bot.user.name}')
+    print(f'🚀 Questuza v{VERSION} is online! Logged in as {bot.user.name}')
     print(f'📊 Connected to {len(bot.guilds)} guilds')
     await bot.change_presence(activity=discord.Activity(
         type=discord.ActivityType.watching, name="your quests | %help"))
+
+    # Handle offline VC tracking - catch up on missed time
+    await handle_offline_vc_tracking()
+
     # Start the background tasks
     if not check_voice_sessions.is_running():
         check_voice_sessions.start()
@@ -698,7 +705,7 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
-# SIMPLIFIED VC TRACKING - FIXED VERSION
+# SIMPLIFIED VC TRACKING - FIXED VERSION WITH 5-HOUR CAP
 @bot.event
 async def on_voice_state_update(member, before, after):
     if member.bot:
@@ -711,12 +718,12 @@ async def on_voice_state_update(member, before, after):
         print(f"🎧 {member} joined VC: {after.channel.name}")
         # Remove any existing session for this user (cleanup)
         conn.execute(
-            '''DELETE FROM voice_sessions 
+            '''DELETE FROM voice_sessions
                        WHERE user_id = ? AND guild_id = ?''',
             (member.id, member.guild.id))
         # Create new session
         conn.execute(
-            '''INSERT INTO voice_sessions 
+            '''INSERT INTO voice_sessions
                        (user_id, guild_id, channel_id, join_time, leave_time)
                        VALUES (?, ?, ?, ?, ?)''',
             (member.id, member.guild.id, after.channel.id,
@@ -727,7 +734,7 @@ async def on_voice_state_update(member, before, after):
         print(f"🎧 {member} left VC: {before.channel.name}")
         # Find the active session
         result = conn.execute(
-            '''SELECT join_time FROM voice_sessions 
+            '''SELECT join_time FROM voice_sessions
                                WHERE user_id = ? AND guild_id = ? AND leave_time IS NULL''',
             (member.id, member.guild.id)).fetchone()
 
@@ -737,17 +744,23 @@ async def on_voice_state_update(member, before, after):
             session_duration = max(0, (datetime.datetime.now() -
                                        join_dt).total_seconds())
 
+            # Apply 5-hour cap (18000 seconds) to individual sessions
+            capped_duration = min(session_duration, 18000)  # 5 hours max
+
+            if session_duration > 18000:
+                print(f"⏱️ Capped VC session for {member} from {int(session_duration)}s to 5 hours (18000s)")
+
             # Update user VC time
             user_data = get_user_data(member.id, member.guild.id)
             if not user_data:
                 user_data = create_default_user(member.id, member.guild.id)
 
-            user_data['vc_seconds'] += int(session_duration)
+            user_data['vc_seconds'] += int(capped_duration)
             update_user_data(user_data)
-            print(f"⏱️ Added {int(session_duration)}s VC time to {member}")
-            
+            print(f"⏱️ Added {int(capped_duration)}s VC time to {member}")
+
             # Update quest stats for VC time
-            vc_minutes = int(session_duration) // 60
+            vc_minutes = int(capped_duration) // 60
             if vc_minutes > 0:
                 update_daily_stats(member.id, member.guild.id, vc_minutes=vc_minutes)
                 update_weekly_stats(member.id, member.guild.id, vc_minutes=vc_minutes)
@@ -897,6 +910,66 @@ async def check_level_up(user, guild):
                 print(f"🎉 Level up message sent for {user}")
             except Exception as e:
                 print(f"❌ Couldn't send level up message: {e}")
+
+
+async def handle_offline_vc_tracking():
+    """Handle VC tracking when bot comes back online - catch up on missed time"""
+    print("🔄 Checking for offline VC sessions to catch up...")
+
+    conn = get_db_connection()
+    try:
+        # Find all active sessions (no leave_time)
+        active_sessions = conn.execute(
+            '''SELECT user_id, guild_id, join_time FROM voice_sessions
+                       WHERE leave_time IS NULL''').fetchall()
+
+        if not active_sessions:
+            print("✅ No active VC sessions found to catch up")
+            return
+
+        caught_up_count = 0
+        for session in active_sessions:
+            user_id, guild_id, join_time_str = session
+            join_time = datetime.datetime.fromisoformat(join_time_str)
+            now = datetime.datetime.now()
+
+            # Calculate missed time
+            missed_seconds = max(0, (now - join_time).total_seconds())
+
+            if missed_seconds > 0:
+                # Apply 5-hour cap even for offline sessions
+                capped_missed = min(missed_seconds, 18000)  # 5 hours max
+
+                # Update user VC time
+                user_data = get_user_data(user_id, guild_id)
+                if not user_data:
+                    user_data = create_default_user(user_id, guild_id)
+
+                user_data['vc_seconds'] += int(capped_missed)
+                update_user_data(user_data)
+
+                # Update quest stats
+                vc_minutes = int(capped_missed) // 60
+                if vc_minutes > 0:
+                    update_daily_stats(user_id, guild_id, vc_minutes=vc_minutes)
+                    update_weekly_stats(user_id, guild_id, vc_minutes=vc_minutes)
+
+                # Mark session as completed with current time
+                conn.execute(
+                    '''UPDATE voice_sessions SET leave_time = ?
+                             WHERE user_id = ? AND guild_id = ? AND leave_time IS NULL''',
+                    (now.isoformat(), user_id, guild_id))
+
+                caught_up_count += 1
+                print(f"⏱️ Caught up {int(capped_missed)}s VC time for user {user_id}")
+
+        conn.commit()
+        print(f"✅ Offline VC tracking complete - caught up {caught_up_count} sessions")
+
+    except Exception as e:
+        print(f"❌ Error in offline VC tracking: {e}")
+    finally:
+        conn.close()
 
 
 # Commands
@@ -1384,6 +1457,28 @@ async def leaderboard_cmd(ctx, category: str = "overall", page: int = 1):
     await ctx.send(embed=embed)
 
 
+@bot.command(name='version')
+async def version_cmd(ctx):
+    """Check the bot's current version"""
+    embed = discord.Embed(
+        title="🤖 Questuza Version",
+        description=f"Current version: **{VERSION}**",
+        color=discord.Color.blue()
+    )
+    embed.add_field(
+        name="📅 Last Updated",
+        value="Features added in this version:\n"
+              "• Version command\n"
+              "• Improved typo detection\n"
+              "• Offline VC tracking\n"
+              "• 5-hour VC session cap\n"
+              "• Advanced quests with pagination",
+        inline=False
+    )
+    embed.set_footer(text="Use %help for command list")
+    await ctx.send(embed=embed)
+
+
 @bot.command(name='help')
 async def help_cmd(ctx):
     embed = discord.Embed(
@@ -1394,7 +1489,7 @@ async def help_cmd(ctx):
 
     commands_list = {
         "%profile [user]": "View your or someone else's profile",
-        "%quests [type]": "View available quests (daily/weekly/achievement)",
+        "%quests [type] [page]": "View available quests (daily/weekly/achievement/special)",
         "%claim <quest_id>": "Manually claim quest reward (100% XP)",
         "%claimall": "Claim all completed quests at once (85% XP, 15% fee)",
         "%autoclaim [on/off/status]": "Toggle auto-claim (70% XP, 30% fee)",
@@ -1405,9 +1500,10 @@ async def help_cmd(ctx):
         "%color <hex>": "Change profile color",
         "%leaderboard [category] [page]":
         "View leaderboards (overall/words/vc/quests/xp)",
+        "%version": "Check bot version and changelog",
         "%guide": "Learn how the bot works"
     }
-    
+
     embed.add_field(
         name="⏰ Quest Expiration",
         value="Unclaimed quests expire and silently auto-collect at 10% XP:\n"
@@ -1481,13 +1577,17 @@ async def guide_cmd(ctx):
 
 
 @bot.command(name='quests')
-async def quests_cmd(ctx, quest_type: str = "all"):
-    """View available quests - Usage: %quests [daily/weekly/achievement/all]"""
-    
+async def quests_cmd(ctx, quest_type: str = "all", page: int = 1):
+    """View available quests with pagination - Usage: %quests [daily/weekly/achievement/special/all] [page]"""
+
     user_data = get_user_data(ctx.author.id, ctx.guild.id)
     if not user_data:
         user_data = create_default_user(ctx.author.id, ctx.guild.id)
-    
+
+    # Validate page number
+    if page < 1:
+        page = 1
+
     # Get quests based on type
     if quest_type.lower() == "daily":
         quests = get_quests_by_type(QuestType.DAILY)
@@ -1501,49 +1601,71 @@ async def quests_cmd(ctx, quest_type: str = "all"):
         quests = get_quests_by_type(QuestType.ACHIEVEMENT)
         title = "🏆 Achievement Quests"
         color = discord.Color.gold()
+    elif quest_type.lower() == "special":
+        quests = get_quests_by_type(QuestType.SPECIAL)
+        title = "💎 Special Quests"
+        color = discord.Color.red()
     else:
         quests = get_all_quests()
         title = "🎯 All Available Quests"
         color = discord.Color.green()
-    
+
+    # Pagination setup
+    quests_per_page = 5
+    total_quests = len(quests)
+    total_pages = (total_quests + quests_per_page - 1) // quests_per_page  # Ceiling division
+
+    # Adjust page if out of bounds
+    if page > total_pages:
+        page = total_pages
+
+    start_idx = (page - 1) * quests_per_page
+    end_idx = start_idx + quests_per_page
+    page_quests = quests[start_idx:end_idx]
+
     embed = discord.Embed(
-        title=title,
+        title=f"{title} - Page {page}/{total_pages}",
         description="Complete quests to earn bonus XP!",
         color=color
     )
-    
-    # Group by completion status
+
+    # Group by completion status for this page
     completed_quests = []
     available_quests = []
-    
-    for quest in quests:
+
+    for quest in page_quests:
         progress = get_user_quest_progress(ctx.author.id, ctx.guild.id, quest.quest_id)
         if progress and progress['completed'] == 1:
             status = "✅ CLAIMED" if progress.get('claimed', 0) == 1 else "🎁 READY TO CLAIM"
             completed_quests.append((quest, status))
         else:
             available_quests.append(quest)
-    
+
     # Show available quests
     if available_quests:
-        for quest in available_quests[:10]:  # Limit to 10 to avoid embed limits
-            type_icon = {"daily": "📅", "weekly": "📆", "achievement": "🏆"}.get(quest.quest_type.value, "🎯")
+        for quest in available_quests:
+            type_icon = {"daily": "📅", "weekly": "📆", "achievement": "🏆", "special": "💎"}.get(quest.quest_type.value, "🎯")
             embed.add_field(
                 name=f"{quest.emoji} {quest.name} {type_icon}",
                 value=f"{quest.description}\n**Reward:** {quest.xp_reward:,} XP\n**ID:** `{quest.quest_id}`",
                 inline=False
             )
-    
+
     # Show completed quests
     if completed_quests:
-        completed_text = "\n".join([f"{q.emoji} {q.name} - {status}" for q, status in completed_quests[:5]])
+        completed_text = "\n".join([f"{q.emoji} {q.name} - {status}" for q, status in completed_quests])
         embed.add_field(
             name="Completed Quests",
             value=completed_text,
             inline=False
         )
-    
-    embed.set_footer(text="Use %quests [daily/weekly/achievement] to filter | Copy the quest ID and use %claim <quest_id> to claim rewards")
+
+    # Add navigation footer
+    footer_text = f"Use %quests {quest_type} [page] to navigate"
+    if page < total_pages:
+        footer_text += f" • Next: %quests {quest_type} {page + 1}"
+    embed.set_footer(text=footer_text)
+
     await ctx.send(embed=embed)
 
 
@@ -1950,40 +2072,43 @@ def get_similar_command(attempted_command: str) -> str:
 
 @bot.event
 async def on_message(message):
-    """Enhanced message handler with helpful error detection"""
+    """Enhanced message handler with improved typo detection"""
     if message.author.bot:
         return await bot.process_commands(message)
 
-    # Check for wrong prefix usage
+    # Check for wrong prefix usage - only for commands that closely match bot commands
     content = message.content.strip()
     wrong_prefixes = ['$', '!', '/', '.', '>', '<', '?']
-    
-    for prefix in wrong_prefixes:
-        if content.startswith(prefix):
-            # Extract the command part
-            command_part = content[1:].split()[0] if len(content) > 1 else ""
-            similar_cmd = get_similar_command(command_part)
-            
-            if similar_cmd:
-                embed = discord.Embed(
-                    title="🤔 Wrong Prefix Detected",
-                    description=f"Hey there! It looks like you tried to use a command, but used the wrong prefix.",
-                    color=discord.Color.orange()
-                )
-                embed.add_field(
-                    name="You typed:",
-                    value=f"`{content[:50]}`",
-                    inline=False
-                )
-                embed.add_field(
-                    name="Did you mean:",
-                    value=f"`%{similar_cmd}`",
-                    inline=False
-                )
-                embed.set_footer(text="💡 Tip: All Questuza commands start with %")
-                await message.channel.send(embed=embed)
-                return
-    
+
+    # Only check for typos if the message looks like it could be a command
+    if len(content) > 1 and len(content) < 50:  # Reasonable command length
+        for prefix in wrong_prefixes:
+            if content.startswith(prefix):
+                # Extract the command part
+                command_part = content[1:].split()[0] if len(content) > 1 else ""
+                similar_cmd = get_similar_command(command_part)
+
+                # Only suggest if it's a very close match (not just any random word)
+                if similar_cmd and len(command_part) >= 3:  # Minimum 3 characters for suggestion
+                    embed = discord.Embed(
+                        title="🤔 Wrong Prefix Detected",
+                        description=f"Hey there! It looks like you tried to use a command, but used the wrong prefix.",
+                        color=discord.Color.orange()
+                    )
+                    embed.add_field(
+                        name="You typed:",
+                        value=f"`{content[:50]}`",
+                        inline=False
+                    )
+                    embed.add_field(
+                        name="Did you mean:",
+                        value=f"`%{similar_cmd}`",
+                        inline=False
+                    )
+                    embed.set_footer(text="💡 Tip: All Questuza commands start with %")
+                    await message.channel.send(embed=embed)
+                    return
+
     # Continue with normal message processing
     if content.startswith('%'):
         return await bot.process_commands(message)

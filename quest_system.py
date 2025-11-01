@@ -246,6 +246,144 @@ ACHIEVEMENT_QUESTS = [
     ),
 ]
 
+SPECIAL_QUESTS = [
+    Quest(
+        quest_id="special_legendary_1",
+        name="Mythical Wordsmith",
+        description="Use 25,000 lifetime unique words",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=50000,
+        requirements={"lifetime_words": 25000},
+        emoji="🗣️"
+    ),
+    Quest(
+        quest_id="special_legendary_2",
+        name="Eternal Voice",
+        description="Spend 500 hours total in voice chat",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=75000,
+        requirements={"total_vc_hours": 500},
+        emoji="🎙️"
+    ),
+    Quest(
+        quest_id="special_legendary_3",
+        name="Server Historian",
+        description="Send 50,000 total messages",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=100000,
+        requirements={"messages_sent": 50000},
+        emoji="📜"
+    ),
+    Quest(
+        quest_id="special_legendary_4",
+        name="Channel Master",
+        description="Be active in 100 different channels",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=60000,
+        requirements={"channels_used": 100},
+        emoji="🏰"
+    ),
+    Quest(
+        quest_id="special_legendary_5",
+        name="Ultimate Level",
+        description="Reach Level 100",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=200000,
+        requirements={"level": 100},
+        emoji="👑"
+    ),
+    Quest(
+        quest_id="special_epic_1",
+        name="Word Collector",
+        description="Use 10,000 lifetime unique words",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=25000,
+        requirements={"lifetime_words": 10000},
+        emoji="📝"
+    ),
+    Quest(
+        quest_id="special_epic_2",
+        name="Voice Commander",
+        description="Spend 100 hours total in voice chat",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=30000,
+        requirements={"total_vc_hours": 100},
+        emoji="🎤"
+    ),
+    Quest(
+        quest_id="special_epic_3",
+        name="Message Maestro",
+        description="Send 10,000 total messages",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=35000,
+        requirements={"messages_sent": 10000},
+        emoji="💬"
+    ),
+    Quest(
+        quest_id="special_epic_4",
+        name="Channel Conqueror",
+        description="Be active in 50 different channels",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=28000,
+        requirements={"channels_used": 50},
+        emoji="🌍"
+    ),
+    Quest(
+        quest_id="special_epic_5",
+        name="Level Lord",
+        description="Reach Level 50",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=50000,
+        requirements={"level": 50},
+        emoji="⚡"
+    ),
+    Quest(
+        quest_id="special_rare_1",
+        name="Word Warrior",
+        description="Use 5,000 lifetime unique words",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=15000,
+        requirements={"lifetime_words": 5000},
+        emoji="⚔️"
+    ),
+    Quest(
+        quest_id="special_rare_2",
+        name="Voice Virtuoso",
+        description="Spend 50 hours total in voice chat",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=18000,
+        requirements={"total_vc_hours": 50},
+        emoji="🎵"
+    ),
+    Quest(
+        quest_id="special_rare_3",
+        name="Chat Champion",
+        description="Send 5,000 total messages",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=20000,
+        requirements={"messages_sent": 5000},
+        emoji="🏆"
+    ),
+    Quest(
+        quest_id="special_rare_4",
+        name="Channel Explorer",
+        description="Be active in 25 different channels",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=12000,
+        requirements={"channels_used": 25},
+        emoji="🗺️"
+    ),
+    Quest(
+        quest_id="special_rare_5",
+        name="Level Legend",
+        description="Reach Level 25",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=25000,
+        requirements={"level": 25},
+        emoji="⭐"
+    ),
+]
+
 
 def get_db_connection():
     """Get database connection with proper settings"""
@@ -294,7 +432,7 @@ def init_quest_tables():
 
 def get_all_quests() -> List[Quest]:
     """Get all available quests"""
-    return DAILY_QUESTS + WEEKLY_QUESTS + ACHIEVEMENT_QUESTS
+    return DAILY_QUESTS + WEEKLY_QUESTS + ACHIEVEMENT_QUESTS + SPECIAL_QUESTS
 
 
 def get_quests_by_type(quest_type: QuestType) -> List[Quest]:
@@ -305,6 +443,8 @@ def get_quests_by_type(quest_type: QuestType) -> List[Quest]:
         return WEEKLY_QUESTS
     elif quest_type == QuestType.ACHIEVEMENT:
         return ACHIEVEMENT_QUESTS
+    elif quest_type == QuestType.SPECIAL:
+        return SPECIAL_QUESTS
     return []
 
 
