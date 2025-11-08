@@ -419,12 +419,19 @@ def init_quest_tables():
                   vc_minutes INTEGER DEFAULT 0, channels_used INTEGER DEFAULT 0,
                   active_days INTEGER DEFAULT 0,
                   PRIMARY KEY (user_id, guild_id, week_start))''')
-    
+
+    # Daily channels tracking for Social Butterfly quest
+    c.execute('''CREATE TABLE IF NOT EXISTS daily_channels
+                 (user_id INTEGER, guild_id INTEGER, date TEXT, channel_id INTEGER,
+                  PRIMARY KEY (user_id, guild_id, date, channel_id))''')
+
     # Indexes for performance
-    c.execute('''CREATE INDEX IF NOT EXISTS idx_daily_stats_date 
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_daily_stats_date
                  ON daily_stats(user_id, guild_id, date)''')
-    c.execute('''CREATE INDEX IF NOT EXISTS idx_weekly_stats_week 
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_weekly_stats_week
                  ON weekly_stats(user_id, guild_id, week_start)''')
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_daily_channels_date
+                 ON daily_channels(user_id, guild_id, date)''')
     
     conn.commit()
     conn.close()

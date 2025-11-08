@@ -191,7 +191,7 @@ def init_db():
             ('last_daily_reset', 'TEXT'),
             ('last_weekly_reset', 'TEXT')
         ]
-        
+
         for col_name, col_type in columns_to_add:
             try:
                 c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
@@ -202,10 +202,79 @@ def init_db():
                 else:
                     raise
 
+    # Version 6: Add trivia system tables and columns
+    if current_version < 6:
+        print("🎯 Adding trivia system tables and columns...")
+
+        # Add trivia_channel to guild_settings
+        try:
+            c.execute('ALTER TABLE guild_settings ADD COLUMN trivia_channel INTEGER')
+            print("✅ Added trivia_channel column to guild_settings")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" in str(e).lower():
+                print("✅ trivia_channel column already exists, skipping...")
+            else:
+                raise
+
+        # Create trivia_questions table
+        c.execute('''CREATE TABLE IF NOT EXISTS trivia_questions
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      question TEXT NOT NULL,
+                      answer TEXT NOT NULL,
+                      category TEXT DEFAULT 'general',
+                      difficulty TEXT DEFAULT 'medium',
+                      created_at TEXT)''')
+        print("✅ Created trivia_questions table")
+
+        # Create trivia_sessions table
+        c.execute('''CREATE TABLE IF NOT EXISTS trivia_sessions
+                     (guild_id INTEGER PRIMARY KEY,
+                      question_id INTEGER,
+                      started_at TEXT,
+                      expires_at TEXT,
+                      answered_by INTEGER)''')
+        print("✅ Created trivia_sessions table")
+
+        # Add trivia_win column to users table
+        try:
+            c.execute('ALTER TABLE users ADD COLUMN trivia_wins INTEGER DEFAULT 0')
+            print("✅ Added trivia_wins column to users")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" in str(e).lower():
+                print("✅ trivia_wins column already exists, skipping...")
+            else:
+                raise
+
+        # Insert sample trivia questions
+        sample_questions = [
+            ("What is the capital of France?", "paris", "geography", "easy"),
+            ("What programming language is this bot written in?", "python", "technology", "easy"),
+            ("What year was Discord founded?", "2015", "technology", "medium"),
+            ("What is the largest planet in our solar system?", "jupiter", "science", "easy"),
+            ("Who painted the Mona Lisa?", "da vinci", "art", "medium"),
+            ("What is the chemical symbol for gold?", "au", "science", "medium"),
+            ("What is the fastest land animal?", "cheetah", "animals", "easy"),
+            ("What is the longest river in the world?", "nile", "geography", "medium"),
+            ("What is the square root of 144?", "12", "math", "easy"),
+            ("What is the largest ocean on Earth?", "pacific", "geography", "easy"),
+            ("Who wrote 'Romeo and Juliet'?", "shakespeare", "literature", "medium"),
+            ("What is the currency of Japan?", "yen", "economics", "easy"),
+            ("What is the hardest natural substance on Earth?", "diamond", "science", "medium"),
+            ("What is the smallest country in the world?", "vatican city", "geography", "hard"),
+            ("What is the most spoken language in the world?", "mandarin", "language", "medium")
+        ]
+
+        for question, answer, category, difficulty in sample_questions:
+            c.execute('''INSERT INTO trivia_questions (question, answer, category, difficulty, created_at)
+                         VALUES (?, ?, ?, ?, ?)''',
+                      (question, answer, category, difficulty, datetime.datetime.now().isoformat()))
+
+        print("✅ Added sample trivia questions")
+
     # Insert/update version info
     c.execute(
         '''INSERT OR REPLACE INTO db_version (version, updated_at)
-                 VALUES (?, ?)''', (5, datetime.datetime.now().isoformat()))
+                 VALUES (?, ?)''', (6, datetime.datetime.now().isoformat()))
 
     conn.commit()
     conn.close()
@@ -504,6 +573,12 @@ def create_default_user(user_id: int, guild_id: int) -> Dict:
     }
 
 
+# Global variables for uptime monitoring
+disconnect_time = None
+reconnect_attempts = 0
+max_reconnect_attempts = 5
+base_reconnect_delay = 5  # seconds
+
 # Bot events
 @bot.event
 async def on_ready():
@@ -521,6 +596,129 @@ async def on_ready():
     if not send_keep_alive.is_running():
         send_keep_alive.start()
         print("💚 Keep-alive task started - sending messages every 2 minutes")
+
+
+@bot.event
+async def on_disconnect():
+    """Handle bot disconnection with logging and recovery preparation"""
+    global disconnect_time, reconnect_attempts
+    disconnect_time = datetime.datetime.now()
+    reconnect_attempts = 0
+
+    print(f"⚠️  Bot disconnected at {disconnect_time}")
+    print("🔄 Preparing for automatic reconnection...")
+
+    # Log disconnection to all guilds (if possible)
+    for guild in bot.guilds:
+        try:
+            # Try to find a suitable channel to log disconnection
+            log_channel = None
+            if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
+                log_channel = guild.system_channel
+            else:
+                for ch in guild.text_channels:
+                    if ch.permissions_for(guild.me).send_messages:
+                        log_channel = ch
+                        break
+
+            if log_channel:
+                embed = discord.Embed(
+                    title="🔌 Bot Disconnected",
+                    description="Questuza has been disconnected and is attempting to reconnect automatically.",
+                    color=discord.Color.orange(),
+                    timestamp=disconnect_time
+                )
+                embed.set_footer(text="Automatic recovery in progress...")
+                await log_channel.send(embed=embed)
+        except Exception as e:
+            print(f"❌ Failed to send disconnect notification to {guild.name}: {e}")
+
+
+@bot.event
+async def on_resumed():
+    """Handle successful reconnection with recovery notifications"""
+    global disconnect_time, reconnect_attempts
+
+    if disconnect_time:
+        downtime = datetime.datetime.now() - disconnect_time
+        downtime_seconds = int(downtime.total_seconds())
+
+        print(f"✅ Bot reconnected successfully after {downtime_seconds}s downtime")
+        print(f"🔄 Reconnection attempts used: {reconnect_attempts}")
+
+        # Reset reconnection variables
+        disconnect_time = None
+        reconnect_attempts = 0
+
+        # Send recovery notifications to guilds
+        for guild in bot.guilds:
+            try:
+                # Find suitable channel for recovery notification
+                notify_channel = None
+                if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
+                    notify_channel = guild.system_channel
+                else:
+                    for ch in guild.text_channels:
+                        if ch.permissions_for(guild.me).send_messages:
+                            notify_channel = ch
+                            break
+
+                if notify_channel:
+                    embed = discord.Embed(
+                        title="🔄 Bot Reconnected",
+                        description="Questuza has successfully reconnected and recovered all systems!",
+                        color=discord.Color.green(),
+                        timestamp=datetime.datetime.now()
+                    )
+
+                    # Format downtime nicely
+                    if downtime_seconds < 60:
+                        downtime_str = f"{downtime_seconds} seconds"
+                    elif downtime_seconds < 3600:
+                        minutes = downtime_seconds // 60
+                        seconds = downtime_seconds % 60
+                        downtime_str = f"{minutes}m {seconds}s"
+                    else:
+                        hours = downtime_seconds // 3600
+                        minutes = (downtime_seconds % 3600) // 60
+                        downtime_str = f"{hours}h {minutes}m"
+
+                    embed.add_field(
+                        name="Downtime",
+                        value=downtime_str,
+                        inline=True
+                    )
+                    embed.add_field(
+                        name="Status",
+                        value="✅ All systems operational",
+                        inline=True
+                    )
+                    embed.set_footer(text="Quest tracking and XP systems have been restored")
+
+                    await notify_channel.send(embed=embed)
+            except Exception as e:
+                print(f"❌ Failed to send recovery notification to {guild.name}: {e}")
+
+        # Handle offline VC tracking after reconnection
+        try:
+            await handle_offline_vc_tracking()
+            print("✅ Offline VC tracking catch-up completed after reconnection")
+        except Exception as e:
+            print(f"❌ Error during VC catch-up after reconnection: {e}")
+
+    # Update bot status
+    await bot.change_presence(activity=discord.Activity(
+        type=discord.ActivityType.watching, name="your quests | %help"))
+
+
+@bot.event
+async def on_connect():
+    """Handle initial connection and reconnection attempts"""
+    global reconnect_attempts
+
+    if reconnect_attempts > 0:
+        print(f"🔗 Reconnection attempt #{reconnect_attempts} successful")
+        reconnect_attempts = 0
 
 
 @bot.event
@@ -607,10 +805,35 @@ async def on_message(message):
     # Update daily and weekly quest stats
     is_reply = 1 if message.reference else 0
     # Use unique_words for quest progress reporting, but cap for XP was applied above
-    update_daily_stats(message.author.id, message.guild.id, 
-                      messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0), replies=is_reply)
+    words_count = len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0
+
+    # Track unique channels for daily stats - check if this is a new channel for today
+    conn = get_db_connection()
+    today = datetime.date.today().isoformat()
+    c = conn.cursor()
+
+    # Check if this channel was already used today in daily_channels table
+    c.execute('''SELECT 1 FROM daily_channels
+                 WHERE user_id = ? AND guild_id = ? AND date = ? AND channel_id = ?''',
+              (message.author.id, message.guild.id, today, message.channel.id))
+    channel_already_used_today = c.fetchone() is not None
+
+    # If this is a new channel for today, insert it into daily_channels
+    if not channel_already_used_today:
+        c.execute('''INSERT INTO daily_channels (user_id, guild_id, date, channel_id)
+                     VALUES (?, ?, ?, ?)''',
+                  (message.author.id, message.guild.id, today, message.channel.id))
+
+    # Only increment daily channels if this is a new channel for today
+    daily_channels_increment = 1 if not channel_already_used_today else 0
+
+    conn.commit()
+    conn.close()
+
+    update_daily_stats(message.author.id, message.guild.id,
+                      messages=1, words=words_count, replies=is_reply, channels=daily_channels_increment)
     update_weekly_stats(message.author.id, message.guild.id,
-                       messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0))
+                       messages=1, words=words_count)
     
     # Check for expired unclaimed quests and auto-collect at 10%
     from quest_system import collect_expired_quests
@@ -837,7 +1060,7 @@ async def send_keep_alive():
     try:
         keep_alive_counter += 1
         channel = bot.get_channel(1334070829415141436)
-        
+
         if channel:
             await channel.send(f"Ignore this message, I am just trying to stay alive :P This is attempt number {keep_alive_counter}")
             print(f"💚 Keep-alive message sent (attempt #{keep_alive_counter})")
@@ -845,6 +1068,338 @@ async def send_keep_alive():
             print(f"❌ Keep-alive channel not found!")
     except Exception as e:
         print(f"❌ Error sending keep-alive message: {e}")
+
+
+# Trivia system variables
+TRIVIA_XP_MULTIPLIER = 2.0  # 2x XP for correct answers
+TRIVIA_XP_PENALTY = 10000   # -10k XP for wrong answers
+TRIVIA_QUESTION_TIMEOUT = 300  # 5 minutes to answer
+TRIVIA_AUTO_SCHEDULE_HOURS = 2  # Auto-schedule questions every 2 hours
+
+# Trivia background task
+@tasks.loop(hours=TRIVIA_AUTO_SCHEDULE_HOURS)
+async def schedule_trivia_questions():
+    """Automatically schedule trivia questions in designated channels"""
+    try:
+        for guild in bot.guilds:
+            # Check if guild has a trivia channel set
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''SELECT trivia_channel FROM guild_settings WHERE guild_id = ?''',
+                      (guild.id,))
+            result = c.fetchone()
+            conn.close()
+
+            if result and result[0]:
+                trivia_channel_id = result[0]
+                trivia_channel = bot.get_channel(trivia_channel_id)
+
+                if trivia_channel and trivia_channel.permissions_for(guild.me).send_messages:
+                    # Check if there's already an active trivia session
+                    conn = get_db_connection()
+                    c = conn.cursor()
+                    c.execute('''SELECT 1 FROM trivia_sessions WHERE guild_id = ?''',
+                              (guild.id,))
+                    active_session = c.fetchone()
+                    conn.close()
+
+                    if not active_session:
+                        # Start a random trivia question
+                        await start_random_trivia_question(guild, trivia_channel)
+                        print(f"🎯 Auto-scheduled trivia question in {guild.name}")
+    except Exception as e:
+        print(f"❌ Error in trivia auto-scheduler: {e}")
+
+
+async def start_random_trivia_question(guild, channel):
+    """Start a random trivia question in the specified channel"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get a random question that hasn't been asked recently
+        c.execute('''SELECT id, question, answer FROM trivia_questions
+                     ORDER BY RANDOM() LIMIT 1''')
+        question_data = c.fetchone()
+
+        if not question_data:
+            await channel.send("❌ No trivia questions available!")
+            conn.close()
+            return
+
+        question_id, question, correct_answer = question_data
+
+        # Create trivia session
+        expires_at = (datetime.datetime.now() + datetime.timedelta(seconds=TRIVIA_QUESTION_TIMEOUT)).isoformat()
+        c.execute('''INSERT OR REPLACE INTO trivia_sessions
+                     (guild_id, question_id, started_at, expires_at, answered_by)
+                     VALUES (?, ?, ?, ?, NULL)''',
+                  (guild.id, question_id, datetime.datetime.now().isoformat(), expires_at))
+
+        conn.commit()
+        conn.close()
+
+        # Send the question
+        embed = discord.Embed(
+            title="🎯 Trivia Time!",
+            description=f"**Question:** {question}",
+            color=discord.Color.blue(),
+            timestamp=datetime.datetime.now()
+        )
+        embed.add_field(
+            name="How to Answer",
+            value="Reply with `%trivia answer <your_answer>`\nYou have 5 minutes to answer!",
+            inline=False
+        )
+        embed.add_field(
+            name="Rewards",
+            value=f"✅ Correct: {TRIVIA_XP_MULTIPLIER}x XP multiplier\n❌ Wrong: -{TRIVIA_XP_PENALTY:,} XP penalty",
+            inline=False
+        )
+        embed.set_footer(text="First correct answer wins!")
+
+        await channel.send(embed=embed)
+
+    except Exception as e:
+        print(f"❌ Error starting trivia question: {e}")
+        await channel.send("❌ Sorry, there was an error starting the trivia question!")
+
+
+async def check_trivia_answer(user, guild, answer):
+    """Check if the user's answer is correct and award/penalize XP"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get active trivia session
+        c.execute('''SELECT question_id, expires_at, answered_by FROM trivia_sessions
+                     WHERE guild_id = ?''', (guild.id,))
+        session_data = c.fetchone()
+
+        if not session_data:
+            conn.close()
+            return "❌ No active trivia question in this guild!"
+
+        question_id, expires_at, answered_by = session_data
+
+        # Check if already answered
+        if answered_by:
+            conn.close()
+            return "❌ This question has already been answered!"
+
+        # Check if expired
+        if datetime.datetime.now() > datetime.datetime.fromisoformat(expires_at):
+            # Clean up expired session
+            c.execute('''DELETE FROM trivia_sessions WHERE guild_id = ?''', (guild.id,))
+            conn.commit()
+            conn.close()
+            return "❌ This trivia question has expired!"
+
+        # Get the correct answer
+        c.execute('''SELECT answer FROM trivia_questions WHERE id = ?''', (question_id,))
+        correct_answer_data = c.fetchone()
+
+        if not correct_answer_data:
+            conn.close()
+            return "❌ Error retrieving question data!"
+
+        correct_answer = correct_answer_data[0].lower().strip()
+
+        # Normalize answers for comparison
+        user_answer = answer.lower().strip()
+        correct_normalized = correct_answer.lower().strip()
+
+        # Get user data
+        user_data = get_user_data(user.id, guild.id)
+        if not user_data:
+            user_data = create_default_user(user.id, guild.id)
+
+        if user_answer == correct_normalized:
+            # Correct answer - award XP with multiplier
+            base_xp = 500  # Base XP for correct trivia answer
+            bonus_xp = int(base_xp * (TRIVIA_XP_MULTIPLIER - 1))  # Additional XP from multiplier
+            total_xp = base_xp + bonus_xp
+
+            user_data['xp'] += total_xp
+            user_data['trivia_wins'] = user_data.get('trivia_wins', 0) + 1
+            update_user_data(user_data)
+
+            # Mark session as answered
+            c.execute('''UPDATE trivia_sessions SET answered_by = ? WHERE guild_id = ?''',
+                      (user.id, guild.id))
+            conn.commit()
+            conn.close()
+
+            return f"🎉 **Correct!** {user.mention} got it right!\n" \
+                   f"**XP Gained:** +{total_xp:,} XP ({TRIVIA_XP_MULTIPLIER}x multiplier)\n" \
+                   f"**Total Trivia Wins:** {user_data['trivia_wins']}"
+
+        else:
+            # Wrong answer - apply penalty
+            old_xp = user_data['xp']
+            user_data['xp'] = max(0, user_data['xp'] - TRIVIA_XP_PENALTY)
+            penalty_applied = old_xp - user_data['xp']
+            update_user_data(user_data)
+
+            conn.close()
+
+            return f"❌ **Wrong answer!** {user.mention}\n" \
+                   f"**XP Penalty:** -{penalty_applied:,} XP\n" \
+                   f"**Correct Answer:** ||{correct_answer.title()}||"
+
+    except Exception as e:
+        print(f"❌ Error checking trivia answer: {e}")
+        return "❌ Sorry, there was an error processing your answer!"
+
+
+# Trivia commands
+@bot.command(name='trivia')
+async def trivia_cmd(ctx, action: str = None, *, args: str = None):
+    """Trivia system commands - Usage: %trivia <start|answer|stop|setchannel> [args]"""
+
+    if not action:
+        embed = discord.Embed(
+            title="🎯 Trivia System Help",
+            description="Test your knowledge and earn XP!",
+            color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="Commands",
+            value="`%trivia start` - Start a trivia question\n"
+                  "`%trivia answer <your_answer>` - Answer the current question\n"
+                  "`%trivia stop` - Stop current trivia (admin only)\n"
+                  "`%trivia setchannel` - Set trivia channel (admin only)",
+            inline=False
+        )
+        embed.add_field(
+            name="Rewards",
+            value=f"✅ Correct: {TRIVIA_XP_MULTIPLIER}x XP multiplier\n❌ Wrong: -{TRIVIA_XP_PENALTY:,} XP penalty",
+            inline=False
+        )
+        await ctx.send(embed=embed)
+        return
+
+    action = action.lower()
+
+    if action == "start":
+        # Check permissions - anyone can start trivia
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Check if trivia channel is set
+        c.execute('''SELECT trivia_channel FROM guild_settings WHERE guild_id = ?''',
+                  (ctx.guild.id,))
+        result = c.fetchone()
+
+        if not result or not result[0]:
+            conn.close()
+            await ctx.send("❌ No trivia channel set! Ask an admin to use `%trivia setchannel` first.")
+            return
+
+        trivia_channel_id = result[0]
+
+        # Check if already in trivia channel
+        if ctx.channel.id != trivia_channel_id:
+            trivia_channel = bot.get_channel(trivia_channel_id)
+            conn.close()
+            await ctx.send(f"❌ Trivia questions can only be started in {trivia_channel.mention if trivia_channel else 'the designated trivia channel'}!")
+            return
+
+        # Check for active session
+        c.execute('''SELECT 1 FROM trivia_sessions WHERE guild_id = ?''', (ctx.guild.id,))
+        active_session = c.fetchone()
+
+        if active_session:
+            conn.close()
+            await ctx.send("❌ There's already an active trivia question! Wait for it to be answered or expire.")
+            return
+
+        conn.close()
+
+        # Start the trivia question
+        await start_random_trivia_question(ctx.guild, ctx.channel)
+        await ctx.send("🎯 Trivia question started!")
+
+    elif action == "answer":
+        if not args:
+            await ctx.send("❌ Please provide an answer! Usage: `%trivia answer <your_answer>`")
+            return
+
+        result = await check_trivia_answer(ctx.author, ctx.guild, args.strip())
+        await ctx.send(result)
+
+    elif action == "stop":
+        # Admin only
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ Only administrators can stop trivia sessions!")
+            return
+
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Check for active session
+        c.execute('''SELECT 1 FROM trivia_sessions WHERE guild_id = ?''', (ctx.guild.id,))
+        active_session = c.fetchone()
+
+        if not active_session:
+            conn.close()
+            await ctx.send("❌ No active trivia session to stop!")
+            return
+
+        # Delete the session
+        c.execute('''DELETE FROM trivia_sessions WHERE guild_id = ?''', (ctx.guild.id,))
+        conn.commit()
+        conn.close()
+
+        await ctx.send("🛑 Trivia session stopped by administrator.")
+
+    elif action == "setchannel":
+        # Admin only
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ Only administrators can set the trivia channel!")
+            return
+
+        # Set current channel as trivia channel
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        c.execute('''INSERT OR REPLACE INTO guild_settings
+                     (guild_id, trivia_channel) VALUES (?, ?)''',
+                  (ctx.guild.id, ctx.channel.id))
+        conn.commit()
+        conn.close()
+
+        embed = discord.Embed(
+            title="✅ Trivia Channel Set!",
+            description=f"Trivia questions will now be posted in {ctx.channel.mention}",
+            color=discord.Color.green()
+        )
+        embed.add_field(
+            name="Auto-Scheduling",
+            value=f"Random questions will be posted every {TRIVIA_AUTO_SCHEDULE_HOURS} hours",
+            inline=False
+        )
+        await ctx.send(embed=embed)
+
+    elif action == "stats":
+        # Show trivia stats
+        user_data = get_user_data(ctx.author.id, ctx.guild.id)
+        if not user_data:
+            user_data = create_default_user(ctx.author.id, ctx.guild.id)
+
+        trivia_wins = user_data.get('trivia_wins', 0)
+
+        embed = discord.Embed(
+            title=f"{ctx.author.display_name}'s Trivia Stats",
+            color=discord.Color.purple()
+        )
+        embed.add_field(name="Trivia Wins", value=f"{trivia_wins:,}", inline=True)
+        embed.add_field(name="XP from Trivia", value=f"{trivia_wins * 500:,} XP", inline=True)
+
+        await ctx.send(embed=embed)
+
+    else:
+        await ctx.send("❌ Invalid action! Use `%trivia` for help.")
 
 
 async def check_level_up(user, guild):
@@ -1971,33 +2526,33 @@ async def quest_progress_cmd(ctx, quest_id: str = None):
     if not quest_id:
         await ctx.send("❌ Please specify a quest ID! Example: `%questprogress daily_chatter`")
         return
-    
+
     quest = get_quest_by_id(quest_id)
     if not quest:
         await ctx.send("❌ Quest not found!")
         return
-    
+
     user_data = get_user_data(ctx.author.id, ctx.guild.id)
     if not user_data:
         user_data = create_default_user(ctx.author.id, ctx.guild.id)
-    
+
     # Get current stats for progress calculation
     conn = get_db_connection()
     c = conn.cursor()
     today = datetime.date.today().isoformat()
     week_start = (datetime.date.today() - datetime.timedelta(days=datetime.date.today().weekday())).isoformat()
-    
+
     c.execute('''SELECT * FROM daily_stats WHERE user_id = ? AND guild_id = ? AND date = ?''',
               (ctx.author.id, ctx.guild.id, today))
     daily_stats = c.fetchone()
     daily_data = dict(daily_stats) if daily_stats else {}
-    
+
     c.execute('''SELECT * FROM weekly_stats WHERE user_id = ? AND guild_id = ? AND week_start = ?''',
               (ctx.author.id, ctx.guild.id, week_start))
     weekly_stats = c.fetchone()
     weekly_data = dict(weekly_stats) if weekly_stats else {}
     conn.close()
-    
+
     check_stats = {
         'daily_messages': daily_data.get('messages', 0),
         'daily_words': daily_data.get('words', 0),
@@ -2016,29 +2571,357 @@ async def quest_progress_cmd(ctx, quest_id: str = None):
         'channels_used': user_data.get('channels_used', 0),
         'images_sent': user_data.get('images_sent', 0),
     }
-    
+
     progress = quest.get_progress(check_stats)
-    
+
     embed = discord.Embed(
         title=f"{quest.emoji} {quest.name}",
         description=quest.description,
         color=discord.Color.blue()
     )
-    
+
     for stat, data in progress.items():
         bar_length = 10
         filled = int((data['percentage'] / 100) * bar_length)
         bar = "█" * filled + "░" * (bar_length - filled)
-        
+
         embed.add_field(
             name=stat.replace('_', ' ').title(),
             value=f"{bar} {data['percentage']}%\n{data['current']}/{data['required']}",
             inline=False
         )
-    
+
     embed.add_field(name="Reward", value=f"{quest.xp_reward:,} XP", inline=True)
     embed.add_field(name="Type", value=quest.quest_type.value.title(), inline=True)
-    
+
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='testmessages')
+async def test_messages_cmd(ctx, member: discord.Member = None):
+    """Test message tracking system"""
+    target = member or ctx.author
+    user_data = get_user_data(target.id, ctx.guild.id)
+
+    if not user_data:
+        await ctx.send(f"❌ No data found for {target.mention}")
+        return
+
+    embed = discord.Embed(
+        title="🧪 Message Tracking Test",
+        description=f"Testing message stats for {target.mention}",
+        color=discord.Color.blue()
+    )
+
+    embed.add_field(name="Messages Sent", value=f"{user_data['messages_sent']:,}", inline=True)
+    embed.add_field(name="Unique Words", value=f"{user_data['unique_words']:,}", inline=True)
+    embed.add_field(name="Lifetime Words", value=f"{user_data['lifetime_words']:,}", inline=True)
+
+    # Calculate expected XP from words
+    expected_xp = user_data['lifetime_words'] * 10
+    embed.add_field(name="Expected XP from Words", value=f"{expected_xp:,}", inline=True)
+    embed.add_field(name="Actual XP", value=f"{user_data['xp']:,}", inline=True)
+
+    # Check for discrepancies
+    if abs(expected_xp - user_data['xp']) > 1000:  # Allow some variance
+        embed.add_field(name="⚠️ Warning", value="XP calculation may be off!", inline=False)
+
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='testchannels')
+async def test_channels_cmd(ctx, member: discord.Member = None):
+    """Test channel tracking system"""
+    target = member or ctx.author
+    user_data = get_user_data(target.id, ctx.guild.id)
+
+    if not user_data:
+        await ctx.send(f"❌ No data found for {target.mention}")
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Get daily channels for today
+    today = datetime.date.today().isoformat()
+    c.execute('''SELECT COUNT(*) FROM daily_channels
+                 WHERE user_id = ? AND guild_id = ? AND date = ?''',
+              (target.id, ctx.guild.id, today))
+    daily_channels = c.fetchone()[0]
+
+    # Get total unique channels
+    c.execute('''SELECT COUNT(*) FROM user_channels
+                 WHERE user_id = ? AND guild_id = ?''',
+              (target.id, ctx.guild.id))
+    total_channels = c.fetchone()[0]
+
+    conn.close()
+
+    embed = discord.Embed(
+        title="🧪 Channel Tracking Test",
+        description=f"Testing channel stats for {target.mention}",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(name="Total Unique Channels", value=f"{user_data['channels_used']:,}", inline=True)
+    embed.add_field(name="Daily Channels Today", value=f"{daily_channels:,}", inline=True)
+    embed.add_field(name="Database Total Channels", value=f"{total_channels:,}", inline=True)
+
+    # Check for discrepancies
+    if user_data['channels_used'] != total_channels:
+        embed.add_field(name="⚠️ Warning", value="Channel count mismatch!", inline=False)
+
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='testimages')
+async def test_images_cmd(ctx, member: discord.Member = None):
+    """Test image tracking system"""
+    target = member or ctx.author
+    user_data = get_user_data(target.id, ctx.guild.id)
+
+    if not user_data:
+        await ctx.send(f"❌ No data found for {target.mention}")
+        return
+
+    embed = discord.Embed(
+        title="🧪 Image Tracking Test",
+        description=f"Testing image stats for {target.mention}",
+        color=discord.Color.purple()
+    )
+
+    embed.add_field(name="Images Sent", value=f"{user_data['images_sent']:,}", inline=True)
+
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='testdaily')
+async def test_daily_cmd(ctx, member: discord.Member = None):
+    """Test daily stats tracking"""
+    target = member or ctx.author
+
+    conn = get_db_connection()
+    c = conn.cursor()
+    today = datetime.date.today().isoformat()
+
+    c.execute('''SELECT * FROM daily_stats WHERE user_id = ? AND guild_id = ? AND date = ?''',
+              (target.id, ctx.guild.id, today))
+    daily_stats = c.fetchone()
+    conn.close()
+
+    embed = discord.Embed(
+        title="🧪 Daily Stats Test",
+        description=f"Testing daily stats for {target.mention} (Today)",
+        color=discord.Color.orange()
+    )
+
+    if daily_stats:
+        daily_data = dict(daily_stats)
+        embed.add_field(name="Messages", value=f"{daily_data.get('messages', 0):,}", inline=True)
+        embed.add_field(name="Words", value=f"{daily_data.get('words', 0):,}", inline=True)
+        embed.add_field(name="VC Minutes", value=f"{daily_data.get('vc_minutes', 0):,}", inline=True)
+        embed.add_field(name="Channels Used", value=f"{daily_data.get('channels_used', 0):,}", inline=True)
+        embed.add_field(name="Replies", value=f"{daily_data.get('replies', 0):,}", inline=True)
+    else:
+        embed.add_field(name="Status", value="No daily stats found for today", inline=False)
+
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='testweekly')
+async def test_weekly_cmd(ctx, member: discord.Member = None):
+    """Test weekly stats tracking"""
+    target = member or ctx.author
+
+    conn = get_db_connection()
+    c = conn.cursor()
+    week_start = (datetime.date.today() - datetime.timedelta(days=datetime.date.today().weekday())).isoformat()
+
+    c.execute('''SELECT * FROM weekly_stats WHERE user_id = ? AND guild_id = ? AND week_start = ?''',
+              (target.id, ctx.guild.id, week_start))
+    weekly_stats = c.fetchone()
+    conn.close()
+
+    embed = discord.Embed(
+        title="🧪 Weekly Stats Test",
+        description=f"Testing weekly stats for {target.mention} (This Week)",
+        color=discord.Color.red()
+    )
+
+    if weekly_stats:
+        weekly_data = dict(weekly_stats)
+        embed.add_field(name="Messages", value=f"{weekly_data.get('messages', 0):,}", inline=True)
+        embed.add_field(name="Words", value=f"{weekly_data.get('words', 0):,}", inline=True)
+        embed.add_field(name="VC Minutes", value=f"{weekly_data.get('vc_minutes', 0):,}", inline=True)
+        embed.add_field(name="Channels Used", value=f"{weekly_data.get('channels_used', 0):,}", inline=True)
+        embed.add_field(name="Active Days", value=f"{weekly_data.get('active_days', 0):,}", inline=True)
+    else:
+        embed.add_field(name="Status", value="No weekly stats found for this week", inline=False)
+
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='testlevel')
+async def test_level_cmd(ctx, member: discord.Member = None):
+    """Test leveling system calculations"""
+    target = member or ctx.author
+    user_data = get_user_data(target.id, ctx.guild.id)
+
+    if not user_data:
+        await ctx.send(f"❌ No data found for {target.mention}")
+        return
+
+    current_level = user_data['level']
+    next_level = current_level + 1
+
+    embed = discord.Embed(
+        title="🧪 Leveling System Test",
+        description=f"Testing level calculations for {target.mention}",
+        color=discord.Color.gold()
+    )
+
+    embed.add_field(name="Current Level", value=user_data['level'], inline=True)
+    embed.add_field(name="Unique Words", value=f"{user_data['unique_words']:,}", inline=True)
+    embed.add_field(name="VC Seconds", value=f"{user_data['vc_seconds']:,}", inline=True)
+    embed.add_field(name="Messages Sent", value=f"{user_data['messages_sent']:,}", inline=True)
+    embed.add_field(name="Quests Completed", value=user_data['quests_completed'], inline=True)
+
+    if next_level <= 100:
+        req = LevelSystem.get_level_requirements(next_level)
+        embed.add_field(
+            name=f"Next Level ({next_level}) Requirements",
+            value=f"Words: {req['words']:,}\nVC: {req['vc_minutes']}m\nMsgs: {req['messages']:,}\nQuests: {req['quests']}",
+            inline=False
+        )
+
+        # Check if ready to level up
+        words_ok = user_data['unique_words'] >= req['words']
+        vc_ok = user_data['vc_seconds'] >= (req['vc_minutes'] * 60)
+        msgs_ok = user_data['messages_sent'] >= req['messages']
+        quests_ok = user_data['quests_completed'] >= req['quests']
+
+        status = "✅ Ready to level up!" if all([words_ok, vc_ok, msgs_ok, quests_ok]) else "⏳ Not ready yet"
+        embed.add_field(name="Level Up Status", value=status, inline=False)
+    else:
+        embed.add_field(name="Status", value="Max level reached!", inline=False)
+
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='testall')
+async def test_all_cmd(ctx, member: discord.Member = None):
+    """Run all tracker tests at once"""
+    target = member or ctx.author
+
+    embed = discord.Embed(
+        title="🧪 Complete Tracker Test Suite",
+        description=f"Running all tests for {target.mention}",
+        color=discord.Color.teal()
+    )
+
+    # Test messages
+    user_data = get_user_data(target.id, ctx.guild.id)
+    if user_data:
+        embed.add_field(name="📝 Messages", value=f"Sent: {user_data['messages_sent']:,}", inline=True)
+        embed.add_field(name="📚 Words", value=f"Unique: {user_data['unique_words']:,}", inline=True)
+        embed.add_field(name="🖼️ Images", value=f"Sent: {user_data['images_sent']:,}", inline=True)
+        embed.add_field(name="🎯 Level", value=user_data['level'], inline=True)
+
+    # Test daily stats
+    conn = get_db_connection()
+    c = conn.cursor()
+    today = datetime.date.today().isoformat()
+
+    c.execute('''SELECT * FROM daily_stats WHERE user_id = ? AND guild_id = ? AND date = ?''',
+              (target.id, ctx.guild.id, today))
+    daily_stats = c.fetchone()
+
+    if daily_stats:
+        daily_data = dict(daily_stats)
+        embed.add_field(name="📅 Daily", value=f"Msgs: {daily_data.get('messages', 0):,}", inline=True)
+        embed.add_field(name="📅 Daily Channels", value=f"{daily_data.get('channels_used', 0):,}", inline=True)
+
+    # Test weekly stats
+    week_start = (datetime.date.today() - datetime.timedelta(days=datetime.date.today().weekday())).isoformat()
+    c.execute('''SELECT * FROM weekly_stats WHERE user_id = ? AND guild_id = ? AND week_start = ?''',
+              (target.id, ctx.guild.id, week_start))
+    weekly_stats = c.fetchone()
+
+    if weekly_stats:
+        weekly_data = dict(weekly_stats)
+        embed.add_field(name="📆 Weekly", value=f"Msgs: {weekly_data.get('messages', 0):,}", inline=True)
+        embed.add_field(name="📆 Active Days", value=f"{weekly_data.get('active_days', 0):,}", inline=True)
+
+    # Test VC
+    c.execute('''SELECT COUNT(*) FROM voice_sessions
+                 WHERE user_id = ? AND guild_id = ? AND leave_time IS NULL''',
+              (target.id, ctx.guild.id))
+    active_sessions = c.fetchone()[0]
+
+    embed.add_field(name="🎧 VC", value=f"Seconds: {user_data['vc_seconds']:,}", inline=True)
+    embed.add_field(name="🎧 Active Sessions", value=active_sessions, inline=True)
+
+    conn.close()
+
+    embed.set_footer(text="All tracker tests completed")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='resetstats')
+@commands.has_permissions(administrator=True)
+async def reset_stats_cmd(ctx, member: discord.Member, stat_type: str = "all"):
+    """Reset user stats (Admin only) - Usage: %resetstats @user [messages/vc/channels/images/all]"""
+    if not member:
+        await ctx.send("❌ Please specify a user to reset stats for!")
+        return
+
+    user_data = get_user_data(member.id, ctx.guild.id)
+    if not user_data:
+        await ctx.send(f"❌ No data found for {member.mention}")
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    if stat_type.lower() == "messages":
+        user_data['messages_sent'] = 0
+        user_data['unique_words'] = 0
+        user_data['lifetime_words'] = 0
+        c.execute('''DELETE FROM daily_stats WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+        c.execute('''DELETE FROM weekly_stats WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+    elif stat_type.lower() == "vc":
+        user_data['vc_seconds'] = 0
+        c.execute('''DELETE FROM voice_sessions WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+    elif stat_type.lower() == "channels":
+        user_data['channels_used'] = 0
+        c.execute('''DELETE FROM user_channels WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+        c.execute('''DELETE FROM daily_channels WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+    elif stat_type.lower() == "images":
+        user_data['images_sent'] = 0
+    elif stat_type.lower() == "all":
+        user_data = create_default_user(member.id, ctx.guild.id)
+        # Clear all related tables
+        c.execute('''DELETE FROM daily_stats WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+        c.execute('''DELETE FROM weekly_stats WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+        c.execute('''DELETE FROM user_channels WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+        c.execute('''DELETE FROM daily_channels WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+        c.execute('''DELETE FROM voice_sessions WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+        c.execute('''DELETE FROM quests_progress WHERE user_id = ? AND guild_id = ?''', (member.id, ctx.guild.id))
+    else:
+        conn.close()
+        await ctx.send("❌ Invalid stat type! Use: messages/vc/channels/images/all")
+        return
+
+    update_user_data(user_data)
+    conn.commit()
+    conn.close()
+
+    embed = discord.Embed(
+        title="🔄 Stats Reset Complete",
+        description=f"Reset {stat_type} stats for {member.mention}",
+        color=discord.Color.red()
+    )
+    embed.set_footer(text="This action cannot be undone")
     await ctx.send(embed=embed)
 
 
