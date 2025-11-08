@@ -35,14 +35,14 @@
 - [x] Test custom quest creation and completion
 
 ## Testing Tasks
-- [ ] Test bot startup and version command
-- [ ] Test typo detection improvements
-- [ ] Test offline VC tracking functionality
-- [ ] Test VC session capping
-- [ ] Test advanced quests and pagination
-- [ ] Test Social Butterfly quest fix
-- [ ] Test disconnect/reconnect handling
-- [ ] Test trivia system functionality
-- [ ] Test custom quest creation
-- [ ] Test all XP multipliers and penalties
-- [ ] Test new tracker test commands and fail-safes
+- [x] Test bot startup and version command
+- [x] Test typo detection improvements
+- [x] Test offline VC tracking functionality
+- [x] Test VC session capping
+- [x] Test advanced quests and pagination
+- [x] Test Social Butterfly quest fix
+- [x] Test disconnect/reconnect handling
+- [x] Test trivia system functionality
+- [x] Test custom quest creation
+- [x] Test all XP multipliers and penalties
+- [x] Test new tracker test commands and fail-safes
