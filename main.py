@@ -18,7 +18,7 @@ from quest_system import (
 )
 
 # Bot version - Update this when making changes
-VERSION = "2.6.0"
+VERSION = "3.0.0"
 
 # Flask app for uptime monitoring
 app = Flask('')
@@ -730,9 +730,43 @@ async def on_connect():
 @bot.event
 async def on_message(message):
     if message.author.bot:
-        return await bot.process_commands(message)
+        return
 
-    if message.content.startswith('%'):
+    # Check for wrong prefix usage - only for commands that closely match bot commands
+    content = message.content.strip()
+    wrong_prefixes = ['$', '!', '/', '.', '>', '<', '?']
+
+    # Only check for typos if the message looks like it could be a command
+    if len(content) > 1 and len(content) < 50:  # Reasonable command length
+        for prefix in wrong_prefixes:
+            if content.startswith(prefix):
+                # Extract the command part
+                command_part = content[1:].split()[0] if len(content) > 1 else ""
+                similar_cmd = get_similar_command(command_part)
+
+                # Only suggest if it's a very close match (not just any random word)
+                if similar_cmd and len(command_part) >= 3:  # Minimum 3 characters for suggestion
+                    embed = discord.Embed(
+                        title="🤔 Wrong Prefix Detected",
+                        description=f"Hey there! It looks like you tried to use a command, but used the wrong prefix.",
+                        color=discord.Color.orange()
+                    )
+                    embed.add_field(
+                        name="You typed:",
+                        value=f"`{content[:50]}`",
+                        inline=False
+                    )
+                    embed.add_field(
+                        name="Did you mean:",
+                        value=f"`%{similar_cmd}`",
+                        inline=False
+                    )
+                    embed.set_footer(text="💡 Tip: All Questuza commands start with %")
+                    await message.channel.send(embed=embed)
+                    return
+
+    # Continue with normal message processing
+    if content.startswith('%'):
         return await bot.process_commands(message)
 
     user_data = get_user_data(message.author.id, message.guild.id)
@@ -849,23 +883,7 @@ async def on_message(message):
         user_data['xp'] += total_expired_xp
         update_user_data(user_data)
         
-        # Send notification about expired quests
-        try:
-            embed = discord.Embed(
-                title="⏰ Expired Quest Rewards Collected",
-                description=f"{message.author.mention}, you had unclaimed quest rewards that expired!",
-                color=discord.Color.orange()
-            )
-            
-            expired_text = "\n".join([f"{q.emoji} **{q.name}** - {xp:,} XP (10% of {q.xp_reward:,})" 
-                                     for q, xp in expired_quests])
-            embed.add_field(name="Expired Quests", value=expired_text, inline=False)
-            embed.add_field(name="Total XP Collected", value=f"+{total_expired_xp:,} XP", inline=True)
-            embed.set_footer(text="💡 Claim quests within 24h (daily) or 7 days (weekly) for full rewards!")
-            
-            await message.channel.send(embed=embed)
-        except:
-            pass
+        # NO MESSAGE SENT - Silent collection
     
     # Check for completed quests
     completed = check_and_complete_quests(message.author.id, message.guild.id, user_data)
@@ -1660,10 +1678,6 @@ async def profile_cmd(ctx, member: discord.Member = None):
     next_level = current_level + 1
     next_req = LevelSystem.get_level_requirements(
         next_level) if next_level <= 100 else None
-
-    user_data['xp'] = (user_data['lifetime_words'] * 10 +
-                       (user_data['vc_seconds'] // 60) * 5 +
-                       user_data['quests_completed'] * 100)
 
     embed = discord.Embed(title=f"{target.display_name}'s Profile",
                           color=discord.Color.from_str(
