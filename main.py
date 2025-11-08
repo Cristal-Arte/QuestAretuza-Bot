@@ -5,7 +5,10 @@ import datetime
 from typing import Dict
 import re
 import os
-from flask import Flask
+from flask import Flask, request, jsonify
+import logging
+import nacl.signing
+import nacl.exceptions
 from threading import Thread
 from quest_system import (
     init_quest_tables, get_all_quests, get_quests_by_type, get_quest_by_id,
@@ -15,7 +18,7 @@ from quest_system import (
 )
 
 # Bot version - Update this when making changes
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 # Flask app for uptime monitoring
 app = Flask('')
@@ -596,6 +599,9 @@ async def on_ready():
     if not send_keep_alive.is_running():
         send_keep_alive.start()
         print("💚 Keep-alive task started - sending messages every 2 minutes")
+    if not schedule_trivia_questions.is_running():
+        schedule_trivia_questions.start()
+        print("🎯 Trivia auto-scheduler started - checking every 2 hours")
 
 
 @bot.event
@@ -2381,16 +2387,16 @@ async def autoclaim_cmd(ctx, status: str = None):
     user_data = get_user_data(ctx.author.id, ctx.guild.id)
     if not user_data:
         user_data = create_default_user(ctx.author.id, ctx.guild.id)
-    
+
     conn = get_db_connection()
     c = conn.cursor()
-    
+
     # Get current autoclaim status
     c.execute('''SELECT autoclaim_enabled FROM users WHERE user_id = ? AND guild_id = ?''',
               (ctx.author.id, ctx.guild.id))
     result = c.fetchone()
     current_status = result[0] if result and result[0] is not None else 0
-    
+
     if status is None or status.lower() == 'status':
         status_text = "✅ Enabled" if current_status else "❌ Disabled"
         embed = discord.Embed(
@@ -2415,14 +2421,14 @@ async def autoclaim_cmd(ctx, status: str = None):
         conn.close()
         await ctx.send(embed=embed)
         return
-    
+
     if status.lower() == 'on':
-        c.execute('''UPDATE users SET autoclaim_enabled = 1 
+        c.execute('''UPDATE users SET autoclaim_enabled = 1
                      WHERE user_id = ? AND guild_id = ?''',
                   (ctx.author.id, ctx.guild.id))
         conn.commit()
         conn.close()
-        
+
         embed = discord.Embed(
             title="✅ Auto-Claim Enabled!",
             description="Quest rewards will now be **automatically claimed with a 30% fee**.",
@@ -2435,14 +2441,14 @@ async def autoclaim_cmd(ctx, status: str = None):
             inline=False
         )
         await ctx.send(embed=embed)
-        
+
     elif status.lower() == 'off':
-        c.execute('''UPDATE users SET autoclaim_enabled = 0 
+        c.execute('''UPDATE users SET autoclaim_enabled = 0
                      WHERE user_id = ? AND guild_id = ?''',
                   (ctx.author.id, ctx.guild.id))
         conn.commit()
         conn.close()
-        
+
         embed = discord.Embed(
             title="🔒 Auto-Claim Disabled!",
             description="You must now **manually claim** quest rewards using `%claim <quest_id>`.",
@@ -2457,6 +2463,255 @@ async def autoclaim_cmd(ctx, status: str = None):
     else:
         conn.close()
         await ctx.send("❌ Invalid option! Use `%autoclaim on`, `%autoclaim off`, or `%autoclaim status`")
+
+
+@bot.command(name='createquest')
+@commands.has_permissions(administrator=True)
+async def create_quest_cmd(ctx, *, args: str = None):
+    """Create a custom quest (Admin only) - Usage: %createquest <type> "<name>" "<description>" <xp> "<requirements>" [emoji]"""
+    from quest_system import create_custom_quest, parse_requirements_string
+    import shlex
+
+    if not args:
+        embed = discord.Embed(
+            title="🎯 Create Custom Quest",
+            description="Create a custom quest for your server!",
+            color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="Usage",
+            value="`%createquest <type> \"<name>\" \"<description>\" <xp> \"<requirements>\" [emoji]`",
+            inline=False
+        )
+        embed.add_field(
+            name="Quest Types",
+            value="`daily`, `weekly`, `achievement`, `special`",
+            inline=True
+        )
+        embed.add_field(
+            name="Requirements Format",
+            value="`stat1:value1,stat2:value2`\nExample: `daily_messages:20,words:50`",
+            inline=True
+        )
+        embed.add_field(
+            name="Available Stats",
+            value="`daily_messages`, `daily_words`, `daily_vc_minutes`, `daily_channels`, `daily_replies`\n`weekly_messages`, `weekly_words`, `weekly_vc_minutes`, `weekly_channels`, `weekly_active_days`\n`level`, `lifetime_words`, `total_vc_hours`, `messages_sent`, `channels_used`, `images_sent`",
+            inline=False
+        )
+        await ctx.send(embed=embed)
+        return
+
+    try:
+        # Parse the arguments using shell-like parsing to handle quotes
+        parsed_args = shlex.split(args)
+    except ValueError as e:
+        await ctx.send(f"❌ Error parsing arguments: {e}\nMake sure to use quotes around name and description!")
+        return
+
+    if len(parsed_args) < 5:
+        await ctx.send("❌ Not enough arguments! Need at least: type, name, description, xp, requirements")
+        return
+
+    quest_type = parsed_args[0].lower()
+    name = parsed_args[1]
+    description = parsed_args[2]
+
+    try:
+        xp_reward = int(parsed_args[3])
+    except ValueError:
+        await ctx.send("❌ XP reward must be a number!")
+        return
+
+    requirements_str = parsed_args[4]
+    emoji = parsed_args[5] if len(parsed_args) > 5 else "🎯"
+
+    # Validate quest type
+    valid_types = ['daily', 'weekly', 'achievement', 'special']
+    if quest_type not in valid_types:
+        await ctx.send(f"❌ Invalid quest type! Valid types: {', '.join(valid_types)}")
+        return
+
+    # Validate XP reward
+    if xp_reward <= 0 or xp_reward > 100000:
+        await ctx.send("❌ XP reward must be between 1 and 100,000!")
+        return
+
+    # Parse requirements
+    parsed_reqs = parse_requirements_string(requirements_str)
+    if not parsed_reqs:
+        await ctx.send("❌ Invalid requirements format! Use format: `stat1:value1,stat2:value2`\nExample: `daily_messages:20,words:50`")
+        return
+
+    # Generate unique quest ID
+    quest_id = f"custom_{ctx.guild.id}_{int(datetime.datetime.now().timestamp())}"
+
+    # Create the quest
+    success = create_custom_quest(
+        creator_id=ctx.author.id,
+        guild_id=ctx.guild.id,
+        quest_id=quest_id,
+        name=name,
+        description=description,
+        quest_type=quest_type,
+        xp_reward=xp_reward,
+        requirements=parsed_reqs,
+        emoji=emoji
+    )
+
+    if success:
+        embed = discord.Embed(
+            title="✅ Custom Quest Created!",
+            description=f"**{name}** has been added to the quest system.",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Quest ID", value=f"`{quest_id}`", inline=True)
+        embed.add_field(name="Type", value=quest_type.title(), inline=True)
+        embed.add_field(name="XP Reward", value=f"{xp_reward:,}", inline=True)
+        embed.add_field(name="Requirements", value="\n".join([f"{k}: {v}" for k, v in parsed_reqs.items()]), inline=False)
+        embed.set_footer(text=f"Created by {ctx.author.display_name}")
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send("❌ Failed to create quest! Quest ID may already exist or invalid data provided.")
+
+
+@bot.command(name='editquest')
+@commands.has_permissions(administrator=True)
+async def edit_quest_cmd(ctx, quest_id: str, field: str, *, value: str):
+    """Edit a custom quest (Admin only) - Usage: %editquest <quest_id> <field> <value>"""
+    from quest_system import edit_custom_quest
+
+    valid_fields = ['name', 'description', 'xp_reward', 'requirements_json', 'emoji', 'enabled']
+    if field not in valid_fields:
+        await ctx.send(f"❌ Invalid field! Valid fields: {', '.join(valid_fields)}")
+        return
+
+    # Special validation for certain fields
+    if field == 'xp_reward':
+        try:
+            int_value = int(value)
+            if int_value <= 0 or int_value > 100000:
+                await ctx.send("❌ XP reward must be between 1 and 100,000!")
+                return
+        except ValueError:
+            await ctx.send("❌ XP reward must be a number!")
+            return
+
+    elif field == 'requirements_json':
+        try:
+            import json
+            json.loads(value)
+        except json.JSONDecodeError:
+            await ctx.send("❌ Requirements must be valid JSON format!\nExample: `{\"daily_messages\": 20, \"words\": 50}`")
+            return
+
+    elif field == 'enabled':
+        if value.lower() not in ['0', '1', 'true', 'false']:
+            await ctx.send("❌ Enabled field must be 0/1 or true/false!")
+            return
+        value = '1' if value.lower() in ['1', 'true'] else '0'
+
+    success = edit_custom_quest(ctx.guild.id, quest_id, field, value)
+
+    if success:
+        embed = discord.Embed(
+            title="✅ Quest Updated!",
+            description=f"**{quest_id}** has been updated.",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Field", value=field, inline=True)
+        embed.add_field(name="New Value", value=value[:100] + "..." if len(value) > 100 else value, inline=True)
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send("❌ Failed to update quest! Quest may not exist or invalid data provided.")
+
+
+@bot.command(name='deletequest')
+@commands.has_permissions(administrator=True)
+async def delete_quest_cmd(ctx, quest_id: str):
+    """Delete a custom quest (Admin only) - Usage: %deletequest <quest_id>"""
+    from quest_system import delete_custom_quest
+
+    # Confirm deletion
+    embed = discord.Embed(
+        title="⚠️ Confirm Deletion",
+        description=f"Are you sure you want to delete quest **{quest_id}**?\n\nThis action cannot be undone!",
+        color=discord.Color.red()
+    )
+    embed.add_field(name="To confirm", value=f"Reply with `yes` to delete or `no` to cancel.", inline=False)
+
+    confirm_msg = await ctx.send(embed=embed)
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel and m.content.lower() in ['yes', 'no']
+
+    try:
+        response = await bot.wait_for('message', check=check, timeout=30.0)
+        if response.content.lower() == 'yes':
+            success = delete_custom_quest(ctx.guild.id, quest_id)
+            if success:
+                embed = discord.Embed(
+                    title="🗑️ Quest Deleted!",
+                    description=f"**{quest_id}** has been permanently removed.",
+                    color=discord.Color.red()
+                )
+                await ctx.send(embed=embed)
+            else:
+                await ctx.send("❌ Failed to delete quest! Quest may not exist.")
+        else:
+            await ctx.send("❌ Deletion cancelled.")
+    except asyncio.TimeoutError:
+        await ctx.send("❌ Deletion timed out. Quest was not deleted.")
+
+    # Clean up confirmation message
+    try:
+        await confirm_msg.delete()
+    except:
+        pass
+
+
+@bot.command(name='listcustomquests')
+@commands.has_permissions(administrator=True)
+async def list_custom_quests_cmd(ctx, page: int = 1):
+    """List all custom quests in this guild (Admin only) - Usage: %listcustomquests [page]"""
+    from quest_system import get_custom_quests
+
+    quests = get_custom_quests(ctx.guild.id)
+
+    if not quests:
+        await ctx.send("❌ No custom quests found in this guild!")
+        return
+
+    # Pagination
+    per_page = 5
+    total_pages = (len(quests) + per_page - 1) // per_page
+    if page < 1 or page > total_pages:
+        page = 1
+
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    page_quests = quests[start_idx:end_idx]
+
+    embed = discord.Embed(
+        title=f"🎯 Custom Quests - Page {page}/{total_pages}",
+        description=f"Total custom quests: {len(quests)}",
+        color=discord.Color.purple()
+    )
+
+    for quest in page_quests:
+        status = "✅ Enabled" if quest['enabled'] else "❌ Disabled"
+        embed.add_field(
+            name=f"{quest['emoji']} {quest['name']} ({status})",
+            value=f"**ID:** `{quest['quest_id']}`\n"
+                  f"**Type:** {quest['quest_type'].title()}\n"
+                  f"**XP:** {quest['xp_reward']:,}\n"
+                  f"**Description:** {quest['description'][:100]}{'...' if len(quest['description']) > 100 else ''}",
+            inline=False
+        )
+
+    if total_pages > 1:
+        embed.set_footer(text=f"Use %listcustomquests {page + 1} for next page")
+
+    await ctx.send(embed=embed)
 
 
 @bot.command(name='backup')

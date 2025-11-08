@@ -19,20 +19,20 @@
 - [x] Add status monitoring and recovery messages
 
 ### 2. Create Trivia System
-- [ ] Add trivia questions table to database schema
-- [ ] Create trivia commands: `%trivia start`, `%trivia answer`, `%trivia stop`
-- [ ] Implement random question scheduling background task
-- [ ] Add XP multiplier system for correct answers
-- [ ] Add XP penalty system (-10k XP for wrong answers)
-- [ ] Add trivia channel settings per guild
-- [ ] Test trivia system with sample questions
+- [x] Add trivia questions table to database schema
+- [x] Create trivia commands: `%trivia start`, `%trivia answer`, `%trivia stop`
+- [x] Implement random question scheduling background task
+- [x] Add XP multiplier system for correct answers
+- [x] Add XP penalty system (-10k XP for wrong answers)
+- [x] Add trivia channel settings per guild
+- [x] Test trivia system with sample questions
 
 ### 3. Add Custom Quest Creation Commands
-- [ ] Create admin commands: `%createquest`, `%editquest`, `%deletequest`
-- [ ] Add custom quests table to database
-- [ ] Implement dynamic quest loading from database
-- [ ] Allow quest type selection (daily/weekly/achievement/special)
-- [ ] Test custom quest creation and completion
+- [x] Create admin commands: %createquest, %editquest, %deletequest
+- [x] Add custom quests table to database
+- [x] Implement dynamic quest loading from database
+- [x] Allow quest type selection (daily/weekly/achievement/special)
+- [x] Test custom quest creation and completion
 
 ## Testing Tasks
 - [ ] Test bot startup and version command

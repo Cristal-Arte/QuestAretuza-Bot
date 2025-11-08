@@ -6,6 +6,7 @@ Handles daily quests, weekly quests, and achievement-based quests
 
 import sqlite3
 import datetime
+import json
 from typing import Dict, List, Optional
 from enum import Enum
 
@@ -396,14 +397,14 @@ def init_quest_tables():
     """Initialize quest tracking tables"""
     conn = get_db_connection()
     c = conn.cursor()
-    
+
     # Quest progress table (already exists but let's ensure it has all fields)
     c.execute('''CREATE TABLE IF NOT EXISTS quests_progress
                  (user_id INTEGER, guild_id INTEGER, quest_id TEXT,
                   progress INTEGER DEFAULT 0, completed INTEGER DEFAULT 0,
                   started_at TEXT, completed_at TEXT, claimed INTEGER DEFAULT 0,
                   PRIMARY KEY (user_id, guild_id, quest_id))''')
-    
+
     # Daily stats tracking
     c.execute('''CREATE TABLE IF NOT EXISTS daily_stats
                  (user_id INTEGER, guild_id INTEGER, date TEXT,
@@ -411,7 +412,7 @@ def init_quest_tables():
                   vc_minutes INTEGER DEFAULT 0, channels_used INTEGER DEFAULT 0,
                   replies INTEGER DEFAULT 0,
                   PRIMARY KEY (user_id, guild_id, date))''')
-    
+
     # Weekly stats tracking
     c.execute('''CREATE TABLE IF NOT EXISTS weekly_stats
                  (user_id INTEGER, guild_id INTEGER, week_start TEXT,
@@ -425,6 +426,22 @@ def init_quest_tables():
                  (user_id INTEGER, guild_id INTEGER, date TEXT, channel_id INTEGER,
                   PRIMARY KEY (user_id, guild_id, date, channel_id))''')
 
+    # Custom quests table
+    c.execute('''CREATE TABLE IF NOT EXISTS custom_quests
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  creator_id INTEGER NOT NULL,
+                  guild_id INTEGER NOT NULL,
+                  quest_id TEXT NOT NULL UNIQUE,
+                  name TEXT NOT NULL,
+                  description TEXT NOT NULL,
+                  quest_type TEXT NOT NULL,
+                  xp_reward INTEGER NOT NULL,
+                  requirements_json TEXT NOT NULL,
+                  emoji TEXT DEFAULT '🎯',
+                  created_at TEXT NOT NULL,
+                  enabled INTEGER DEFAULT 1,
+                  UNIQUE(guild_id, quest_id))''')
+
     # Indexes for performance
     c.execute('''CREATE INDEX IF NOT EXISTS idx_daily_stats_date
                  ON daily_stats(user_id, guild_id, date)''')
@@ -432,32 +449,79 @@ def init_quest_tables():
                  ON weekly_stats(user_id, guild_id, week_start)''')
     c.execute('''CREATE INDEX IF NOT EXISTS idx_daily_channels_date
                  ON daily_channels(user_id, guild_id, date)''')
-    
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_custom_quests_guild
+                 ON custom_quests(guild_id, enabled)''')
+
     conn.commit()
     conn.close()
 
 
-def get_all_quests() -> List[Quest]:
-    """Get all available quests"""
-    return DAILY_QUESTS + WEEKLY_QUESTS + ACHIEVEMENT_QUESTS + SPECIAL_QUESTS
+def load_custom_quests(guild_id: int) -> List[Quest]:
+    """Load custom quests for a specific guild from database"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    c.execute('''SELECT * FROM custom_quests
+                 WHERE guild_id = ? AND enabled = 1''', (guild_id,))
+    custom_quests_data = c.fetchall()
+    conn.close()
+
+    custom_quests = []
+    for row in custom_quests_data:
+        try:
+            requirements = json.loads(row['requirements_json'])
+            quest_type = QuestType(row['quest_type'])
+
+            quest = Quest(
+                quest_id=row['quest_id'],
+                name=row['name'],
+                description=row['description'],
+                quest_type=quest_type,
+                xp_reward=row['xp_reward'],
+                requirements=requirements,
+                emoji=row['emoji']
+            )
+            custom_quests.append(quest)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Error loading custom quest {row['quest_id']}: {e}")
+            continue
+
+    return custom_quests
 
 
-def get_quests_by_type(quest_type: QuestType) -> List[Quest]:
-    """Get quests filtered by type"""
+def get_all_quests(guild_id: Optional[int] = None) -> List[Quest]:
+    """Get all available quests, including custom quests if guild_id provided"""
+    base_quests = DAILY_QUESTS + WEEKLY_QUESTS + ACHIEVEMENT_QUESTS + SPECIAL_QUESTS
+
+    if guild_id is not None:
+        custom_quests = load_custom_quests(guild_id)
+        return base_quests + custom_quests
+
+    return base_quests
+
+
+def get_quests_by_type(quest_type: QuestType, guild_id: Optional[int] = None) -> List[Quest]:
+    """Get quests filtered by type, including custom quests if guild_id provided"""
+    base_quests = []
     if quest_type == QuestType.DAILY:
-        return DAILY_QUESTS
+        base_quests = DAILY_QUESTS
     elif quest_type == QuestType.WEEKLY:
-        return WEEKLY_QUESTS
+        base_quests = WEEKLY_QUESTS
     elif quest_type == QuestType.ACHIEVEMENT:
-        return ACHIEVEMENT_QUESTS
+        base_quests = ACHIEVEMENT_QUESTS
     elif quest_type == QuestType.SPECIAL:
-        return SPECIAL_QUESTS
-    return []
+        base_quests = SPECIAL_QUESTS
+
+    if guild_id is not None:
+        custom_quests = [q for q in load_custom_quests(guild_id) if q.quest_type == quest_type]
+        return base_quests + custom_quests
+
+    return base_quests
 
 
-def get_quest_by_id(quest_id: str) -> Optional[Quest]:
-    """Get a specific quest by ID"""
-    all_quests = get_all_quests()
+def get_quest_by_id(quest_id: str, guild_id: Optional[int] = None) -> Optional[Quest]:
+    """Get a specific quest by ID, checking custom quests if guild_id provided"""
+    all_quests = get_all_quests(guild_id)
     for quest in all_quests:
         if quest.quest_id == quest_id:
             return quest
@@ -708,13 +772,140 @@ def reset_weekly_quests(user_id: int, guild_id: int):
     """Reset weekly quests for a new week"""
     conn = get_db_connection()
     c = conn.cursor()
-    
+
     # Remove completed weekly quests
     weekly_quest_ids = [q.quest_id for q in WEEKLY_QUESTS]
     placeholders = ','.join('?' * len(weekly_quest_ids))
-    c.execute(f'''DELETE FROM quests_progress 
+    c.execute(f'''DELETE FROM quests_progress
                   WHERE user_id = ? AND guild_id = ? AND quest_id IN ({placeholders})''',
               (user_id, guild_id, *weekly_quest_ids))
-    
+
     conn.commit()
     conn.close()
+
+
+# Custom Quest Management Functions
+
+def create_custom_quest(creator_id: int, guild_id: int, quest_id: str, name: str,
+                       description: str, quest_type: str, xp_reward: int,
+                       requirements: Dict, emoji: str = "🎯") -> bool:
+    """Create a new custom quest"""
+    # Validate quest_type
+    try:
+        QuestType(quest_type)
+    except ValueError:
+        return False
+
+    # Check if quest_id already exists (built-in or custom)
+    if get_quest_by_id(quest_id, guild_id) is not None:
+        return False
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    try:
+        c.execute('''INSERT INTO custom_quests
+                     (creator_id, guild_id, quest_id, name, description, quest_type,
+                      xp_reward, requirements_json, emoji, created_at, enabled)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)''',
+                  (creator_id, guild_id, quest_id, name, description, quest_type,
+                   xp_reward, json.dumps(requirements), emoji,
+                   datetime.datetime.now().isoformat()))
+
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False  # Quest ID already exists
+    finally:
+        conn.close()
+
+
+def edit_custom_quest(guild_id: int, quest_id: str, field: str, value: str) -> bool:
+    """Edit a custom quest field"""
+    allowed_fields = ['name', 'description', 'xp_reward', 'requirements_json', 'emoji', 'enabled']
+
+    if field not in allowed_fields:
+        return False
+
+    # Special handling for requirements_json
+    if field == 'requirements_json':
+        try:
+            json.loads(value)
+        except json.JSONDecodeError:
+            return False
+
+    # Special handling for xp_reward
+    if field == 'xp_reward':
+        try:
+            int(value)
+        except ValueError:
+            return False
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Check if quest exists and is custom
+    c.execute('''SELECT id FROM custom_quests
+                 WHERE guild_id = ? AND quest_id = ?''', (guild_id, quest_id))
+    if not c.fetchone():
+        conn.close()
+        return False
+
+    try:
+        c.execute(f'''UPDATE custom_quests SET {field} = ? WHERE guild_id = ? AND quest_id = ?''',
+                  (value, guild_id, quest_id))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def delete_custom_quest(guild_id: int, quest_id: str) -> bool:
+    """Delete a custom quest"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    c.execute('''DELETE FROM custom_quests WHERE guild_id = ? AND quest_id = ?''',
+              (guild_id, quest_id))
+
+    deleted = c.rowcount > 0
+    conn.commit()
+    conn.close()
+
+    return deleted
+
+
+def get_custom_quests(guild_id: int) -> List[Dict]:
+    """Get all custom quests for a guild"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    c.execute('''SELECT * FROM custom_quests WHERE guild_id = ? ORDER BY created_at DESC''',
+              (guild_id,))
+    quests = [dict(row) for row in c.fetchall()]
+    conn.close()
+
+    return quests
+
+
+def parse_requirements_string(requirements_str: str) -> Dict:
+    """Parse requirements string like 'daily_messages:20,words:50' into dict"""
+    requirements = {}
+    if not requirements_str.strip():
+        return requirements
+
+    pairs = requirements_str.split(',')
+    for pair in pairs:
+        if ':' not in pair:
+            continue
+        key, value = pair.split(':', 1)
+        key = key.strip()
+        try:
+            value = int(value.strip())
+            requirements[key] = value
+        except ValueError:
+            continue
+
+    return requirements
