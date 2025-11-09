@@ -3150,6 +3150,247 @@ async def test_all_cmd(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 
+# Manual Stat Editor Commands - Only for user 942963169071079504
+
+def is_authorized():
+    def predicate(ctx):
+        return ctx.author.id == 942963169071079504
+    return commands.check(predicate)
+
+async def confirm_edit(ctx, target, stat_name, current_value, new_value):
+    """Helper function to confirm stat edits"""
+    embed = discord.Embed(
+        title="⚠️ Confirm Stat Edit",
+        description=f"Are you sure you want to change {target.mention}'s {stat_name}?",
+        color=discord.Color.orange()
+    )
+    embed.add_field(name="Current Value", value=f"{current_value:,}", inline=True)
+    embed.add_field(name="New Value", value=f"{new_value:,}", inline=True)
+    embed.set_footer(text="Type 'yes' to confirm or 'no' to cancel")
+
+    confirm_msg = await ctx.send(embed=embed)
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel and m.content.lower() in ['yes', 'no']
+
+    try:
+        response = await bot.wait_for('message', check=check, timeout=30.0)
+        await confirm_msg.delete()
+        return response.content.lower() == 'yes'
+    except asyncio.TimeoutError:
+        await confirm_msg.delete()
+        await ctx.send("❌ Edit timed out. No changes made.")
+        return False
+
+# Set Absolute Value Commands
+
+@bot.command(name='setxp')
+@is_authorized()
+async def set_xp_cmd(ctx, member: discord.Member, amount: int):
+    """Set a user's XP to an absolute value (Authorized users only)"""
+    if amount < 0:
+        await ctx.send("❌ XP cannot be negative!")
+        return
+
+    user_data = get_user_data(member.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(member.id, ctx.guild.id)
+
+    current_xp = user_data['xp']
+    if not await confirm_edit(ctx, member, "XP", current_xp, amount):
+        return
+
+    user_data['xp'] = amount
+    update_user_data(user_data)
+
+    embed = discord.Embed(
+        title="✅ XP Updated",
+        description=f"{member.mention}'s XP has been set to {amount:,}",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name='setvc')
+@is_authorized()
+async def set_vc_cmd(ctx, member: discord.Member, minutes: int):
+    """Set a user's VC time to an absolute value in minutes (Authorized users only)"""
+    if minutes < 0:
+        await ctx.send("❌ VC time cannot be negative!")
+        return
+
+    user_data = get_user_data(member.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(member.id, ctx.guild.id)
+
+    current_minutes = user_data['vc_seconds'] // 60
+    if not await confirm_edit(ctx, member, "VC Minutes", current_minutes, minutes):
+        return
+
+    user_data['vc_seconds'] = minutes * 60
+    update_user_data(user_data)
+
+    embed = discord.Embed(
+        title="✅ VC Time Updated",
+        description=f"{member.mention}'s VC time has been set to {minutes:,} minutes",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name='setwords')
+@is_authorized()
+async def set_words_cmd(ctx, member: discord.Member, amount: int):
+    """Set a user's unique word count to an absolute value (Authorized users only)"""
+    if amount < 0:
+        await ctx.send("❌ Word count cannot be negative!")
+        return
+
+    user_data = get_user_data(member.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(member.id, ctx.guild.id)
+
+    current_words = user_data['unique_words']
+    if not await confirm_edit(ctx, member, "Unique Words", current_words, amount):
+        return
+
+    user_data['unique_words'] = amount
+    update_user_data(user_data)
+
+    embed = discord.Embed(
+        title="✅ Word Count Updated",
+        description=f"{member.mention}'s unique word count has been set to {amount:,}",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name='setmessages')
+@is_authorized()
+async def set_messages_cmd(ctx, member: discord.Member, amount: int):
+    """Set a user's message count to an absolute value (Authorized users only)"""
+    if amount < 0:
+        await ctx.send("❌ Message count cannot be negative!")
+        return
+
+    user_data = get_user_data(member.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(member.id, ctx.guild.id)
+
+    current_messages = user_data['messages_sent']
+    if not await confirm_edit(ctx, member, "Messages Sent", current_messages, amount):
+        return
+
+    user_data['messages_sent'] = amount
+    update_user_data(user_data)
+
+    embed = discord.Embed(
+        title="✅ Message Count Updated",
+        description=f"{member.mention}'s message count has been set to {amount:,}",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+# Add/Subtract Commands
+
+@bot.command(name='addxp')
+@is_authorized()
+async def add_xp_cmd(ctx, member: discord.Member, amount: int):
+    """Add or subtract XP from a user (Authorized users only)"""
+    user_data = get_user_data(member.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(member.id, ctx.guild.id)
+
+    current_xp = user_data['xp']
+    new_xp = max(0, current_xp + amount)  # Prevent negative XP
+
+    if not await confirm_edit(ctx, member, "XP", current_xp, new_xp):
+        return
+
+    user_data['xp'] = new_xp
+    update_user_data(user_data)
+
+    embed = discord.Embed(
+        title="✅ XP Updated",
+        description=f"{member.mention}'s XP has been {'increased' if amount > 0 else 'decreased'} by {abs(amount):,}",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="New Total", value=f"{new_xp:,}", inline=True)
+    await ctx.send(embed=embed)
+
+@bot.command(name='addvc')
+@is_authorized()
+async def add_vc_cmd(ctx, member: discord.Member, minutes: int):
+    """Add or subtract VC time from a user in minutes (Authorized users only)"""
+    user_data = get_user_data(member.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(member.id, ctx.guild.id)
+
+    current_minutes = user_data['vc_seconds'] // 60
+    new_minutes = max(0, current_minutes + minutes)  # Prevent negative VC
+
+    if not await confirm_edit(ctx, member, "VC Minutes", current_minutes, new_minutes):
+        return
+
+    user_data['vc_seconds'] = new_minutes * 60
+    update_user_data(user_data)
+
+    embed = discord.Embed(
+        title="✅ VC Time Updated",
+        description=f"{member.mention}'s VC time has been {'increased' if minutes > 0 else 'decreased'} by {abs(minutes):,} minutes",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="New Total", value=f"{new_minutes:,} minutes", inline=True)
+    await ctx.send(embed=embed)
+
+@bot.command(name='addwords')
+@is_authorized()
+async def add_words_cmd(ctx, member: discord.Member, amount: int):
+    """Add or subtract unique words from a user (Authorized users only)"""
+    user_data = get_user_data(member.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(member.id, ctx.guild.id)
+
+    current_words = user_data['unique_words']
+    new_words = max(0, current_words + amount)  # Prevent negative words
+
+    if not await confirm_edit(ctx, member, "Unique Words", current_words, new_words):
+        return
+
+    user_data['unique_words'] = new_words
+    update_user_data(user_data)
+
+    embed = discord.Embed(
+        title="✅ Word Count Updated",
+        description=f"{member.mention}'s unique word count has been {'increased' if amount > 0 else 'decreased'} by {abs(amount):,}",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="New Total", value=f"{new_words:,}", inline=True)
+    await ctx.send(embed=embed)
+
+@bot.command(name='addmessages')
+@is_authorized()
+async def add_messages_cmd(ctx, member: discord.Member, amount: int):
+    """Add or subtract messages from a user (Authorized users only)"""
+    user_data = get_user_data(member.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(member.id, ctx.guild.id)
+
+    current_messages = user_data['messages_sent']
+    new_messages = max(0, current_messages + amount)  # Prevent negative messages
+
+    if not await confirm_edit(ctx, member, "Messages Sent", current_messages, new_messages):
+        return
+
+    user_data['messages_sent'] = new_messages
+    update_user_data(user_data)
+
+    embed = discord.Embed(
+        title="✅ Message Count Updated",
+        description=f"{member.mention}'s message count has been {'increased' if amount > 0 else 'decreased'} by {abs(amount):,}",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="New Total", value=f"{new_messages:,}", inline=True)
+    await ctx.send(embed=embed)
+
+
 @bot.command(name='resetstats')
 @commands.has_permissions(administrator=True)
 async def reset_stats_cmd(ctx, member: discord.Member, stat_type: str = "all"):
