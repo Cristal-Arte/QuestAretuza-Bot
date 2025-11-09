@@ -16,6 +16,9 @@ from quest_system import (
     update_weekly_stats, QuestType, get_user_quest_progress, reset_daily_quests,
     reset_weekly_quests
 )
+from PIL import Image, ImageDraw, ImageFont
+import requests
+from io import BytesIO
 
 # Bot version - Update this when making changes
 VERSION = "3.0.0"
@@ -27,6 +30,12 @@ app = Flask('')
 @app.route('/')
 def home():
     return "Questuza is running!"
+
+
+@app.route('/welcome')
+def welcome():
+    logging.info(f"Request received: {request.method} {request.path}")
+    return jsonify({'message': 'Welcome to the Flask API Service!'})
 
 
 def run():
@@ -1744,6 +1753,11 @@ async def profile_cmd(ctx, member: discord.Member = None):
             text=f"🎯 {user_data['xp_multiplier']}x XP Multiplier Active!")
 
     await ctx.send(embed=embed)
+
+
+@bot.command(name='me')
+async def me_cmd(ctx):
+    await profile_cmd(ctx, None)
 
 
 @bot.command(name='vctest')
