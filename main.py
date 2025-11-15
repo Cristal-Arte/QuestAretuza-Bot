@@ -21,7 +21,7 @@ import requests
 from io import BytesIO
 
 # Bot version - Update this when making changes
-VERSION = "3.2.7"
+VERSION = "3.2.2"
 
 # Flask app for uptime monitoring
 app = Flask('')
@@ -1810,22 +1810,67 @@ async def profile_cmd(ctx, member: discord.Member = None):
 def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.Guild) -> BytesIO:
     """Generate a profile card image based on the design specifications"""
     import math
+    from collections import Counter
     
-    # Image dimensions (estimated from design)
-    CARD_WIDTH = 1000
-    CARD_HEIGHT = 600
+    # Image dimensions: 11x8 inches at 150 DPI for good quality
+    DPI = 150
+    CARD_WIDTH = int(11 * DPI)  # 1650 pixels
+    CARD_HEIGHT = int(8 * DPI)  # 1200 pixels
     
-    # Colors
+    # Padding in inches, converted to pixels
+    PADDING_LEFT = int(0.4 * DPI)   # ~0.4 inch = 60px
+    PADDING_RIGHT = int(0.4 * DPI)  # ~0.4 inch = 60px
+    PADDING_TOP = int(0.9 * DPI)    # ~0.9 inch = 135px
+    PADDING_BOTTOM = int(0.9 * DPI) # ~0.9 inch = 135px
+    
+    # Content area
+    CONTENT_X = PADDING_LEFT
+    CONTENT_Y = PADDING_TOP
+    CONTENT_WIDTH = CARD_WIDTH - PADDING_LEFT - PADDING_RIGHT
+    CONTENT_HEIGHT = CARD_HEIGHT - PADDING_TOP - PADDING_BOTTOM
+    
+    # Default colors
     DEFAULT_BG_COLOR = (128, 128, 128)  # Gray default
     PROFILE_BOX_COLOR = (255, 0, 0)  # Red for profile picture
     COUNTRY_BOX_COLOR = (118, 137, 131)  # #758983 default for country
     GUILD_BOX_COLOR = (118, 137, 131)  # #758983 default for guild
-    PROGRESS_BAR_BG = (84, 107, 81)  # #546b51 dark green
-    PROGRESS_BAR_FILL = (118, 137, 131)  # Ash green (approximate)
+    DEFAULT_PROGRESS_BAR_BG = (84, 107, 81)  # #546b51 dark green (default)
+    DEFAULT_PROGRESS_BAR_FILL = (118, 137, 131)  # Ash green (default)
     MULTIPLIER_BOX_COLOR = (84, 107, 81)  # #546b51 dark blue/green
     MESSAGE_ICON_COLOR = (255, 255, 255)  # White
-    TEXT_WHITE = (255, 255, 255)
-    TEXT_GRAY = (180, 180, 180)  # Darker gray for username and about me
+    
+    # Helper function to extract dominant color from image
+    def get_dominant_color(img: Image.Image, k=3) -> tuple:
+        """Extract dominant color from image using k-means clustering approximation"""
+        try:
+            # Resize for faster processing
+            img_small = img.resize((100, 100), Image.Resampling.LANCZOS)
+            img_small = img_small.convert('RGB')
+            pixels = list(img_small.getdata())
+            
+            # Simple approach: get most common colors
+            color_counts = Counter(pixels)
+            # Get top color
+            dominant = color_counts.most_common(1)[0][0]
+            return dominant
+        except:
+            return DEFAULT_PROGRESS_BAR_FILL
+    
+    # Helper function to download image/GIF (extracts first frame for GIFs)
+    def download_image(url: str, size: tuple) -> Image.Image:
+        try:
+            response = requests.get(url, timeout=10, stream=True)
+            img_data = Image.open(BytesIO(response.content))
+            
+            # Handle GIFs - extract first frame
+            if hasattr(img_data, 'is_animated') and img_data.is_animated:
+                img_data.seek(0)  # Get first frame
+            
+            img_data = img_data.convert('RGB')
+            img_data = img_data.resize(size, Image.Resampling.LANCZOS)
+            return img_data
+        except:
+            return None
     
     # Get background color (use profile_card_bg_color, fallback to custom_color, default to gray)
     bg_color_hex = user_data.get('profile_card_bg_color') or user_data.get('custom_color', '#808080')
@@ -1839,95 +1884,112 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
     except:
         bg_r, bg_g, bg_b = DEFAULT_BG_COLOR
     
-    # Calculate brightness and darken if needed (30-50% darkening)
-    brightness = (bg_r * 299 + bg_g * 587 + bg_b * 114) / 1000
-    darken_factor = 0.5 if brightness > 180 else 0.3 if brightness > 120 else 0.0
+    # Calculate brightness for text color decision
+    bg_brightness = (bg_r * 299 + bg_g * 587 + bg_b * 114) / 1000
+    
+    # Reduced darkening: 10-20% only
+    darken_factor = 0.2 if bg_brightness > 200 else 0.15 if bg_brightness > 150 else 0.1 if bg_brightness > 100 else 0.0
     bg_r = int(bg_r * (1 - darken_factor))
     bg_g = int(bg_g * (1 - darken_factor))
     bg_b = int(bg_b * (1 - darken_factor))
     bg_color = (bg_r, bg_g, bg_b)
     
-    # Helper function to download image
-    def download_image(url: str, size: tuple) -> Image.Image:
-        try:
-            response = requests.get(url, timeout=5)
-            img_data = Image.open(BytesIO(response.content))
-            img_data = img_data.convert('RGB')
-            img_data = img_data.resize(size, Image.Resampling.LANCZOS)
-            return img_data
-        except:
-            return None
+    # Determine text colors based on background brightness
+    # If background is very bright (white), use black text, otherwise white
+    is_light_bg = bg_brightness > 200
+    TEXT_COLOR = (0, 0, 0) if is_light_bg else (255, 255, 255)
+    TEXT_GRAY = (100, 100, 100) if is_light_bg else (180, 180, 180)  # About me text
+    
+    # Progress bar colors (will be updated if banner is set)
+    progress_bar_bg = DEFAULT_PROGRESS_BAR_BG
+    progress_bar_fill = DEFAULT_PROGRESS_BAR_FILL
     
     # Create base image
     img = Image.new('RGB', (CARD_WIDTH, CARD_HEIGHT), bg_color)
     draw = ImageDraw.Draw(img)
     
-    # If background_url is set, try to overlay it (with darkening)
+    # If background_url is set, try to overlay it (with minimal darkening)
     background_url = user_data.get('background_url')
+    banner_img = None
     if background_url:
         try:
             bg_img = download_image(background_url, (CARD_WIDTH, CARD_HEIGHT))
             if bg_img:
+                banner_img = bg_img.copy()
+                # Calculate brightness from banner image
+                banner_brightness = sum(bg_img.convert('L').resize((10, 10)).getdata()) / 100
+                is_light_bg = banner_brightness > 200
+                TEXT_COLOR = (0, 0, 0) if is_light_bg else (255, 255, 255)
+                TEXT_GRAY = (100, 100, 100) if is_light_bg else (180, 180, 180)
+                
                 # Paste background image first
                 img.paste(bg_img, (0, 0))
-                # Apply darkening overlay
+                # Apply minimal darkening overlay (10-20%)
                 overlay = Image.new('RGB', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0))
                 overlay_alpha = Image.new('L', (CARD_WIDTH, CARD_HEIGHT), int(255 * darken_factor))
                 img = Image.composite(img, overlay, overlay_alpha)
                 draw = ImageDraw.Draw(img)
+                
+                # Extract dominant color from banner for progress bar
+                dominant_color = get_dominant_color(bg_img)
+                # Create a darker version for progress bar background
+                progress_bar_fill = dominant_color
+                # Darken the dominant color for the background
+                progress_bar_bg = tuple(max(0, int(c * 0.6)) for c in dominant_color)
         except:
             pass  # If background image fails, just use solid color
     
     # Try to load Anton font, fallback to default
     # Note: To use Anton font, place Anton-Regular.ttf in the 'fonts' directory or root directory
     # Download from: https://fonts.google.com/specimen/Anton
+    # Font sizes: Canva size 12 = ~16px, size 8 = ~11px (scaled for 150 DPI)
     try:
-        # Try to load Anton font from system or common locations
         font_paths = [
-            'fonts/Anton-Regular.ttf',  # Preferred location
-            'Anton-Regular.ttf',  # Root directory
+            'fonts/Anton-Regular.ttf',
+            'Anton-Regular.ttf',
             './fonts/Anton-Regular.ttf',
-            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',  # Linux fallback
-            'C:/Windows/Fonts/arial.ttf',  # Windows fallback
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+            'C:/Windows/Fonts/arial.ttf',
         ]
-        title_font = None
         font_path_used = None
         for path in font_paths:
             try:
                 if os.path.exists(path):
-                    title_font = ImageFont.truetype(path, 48)
                     font_path_used = path
                     break
             except:
                 continue
-        if not title_font:
-            title_font = ImageFont.load_default()
         
-        # Smaller fonts - use same font file if available
-        if title_font != ImageFont.load_default() and font_path_used:
-            try:
-                large_font = ImageFont.truetype(font_path_used, 36)
-                medium_font = ImageFont.truetype(font_path_used, 28)
-                small_font = ImageFont.truetype(font_path_used, 24)
-            except:
-                large_font = ImageFont.load_default()
-                medium_font = ImageFont.load_default()
-                small_font = ImageFont.load_default()
+        if font_path_used:
+            # Canva size 12 equivalent (scaled for quality)
+            main_font_size = int(16 * (DPI / 72))  # ~33px at 150 DPI
+            about_font_size = int(11 * (DPI / 72))  # ~23px at 150 DPI (Canva size 8)
+            title_font = ImageFont.truetype(font_path_used, main_font_size)
+            large_font = ImageFont.truetype(font_path_used, main_font_size)
+            medium_font = ImageFont.truetype(font_path_used, main_font_size)
+            small_font = ImageFont.truetype(font_path_used, main_font_size)
+            about_font = ImageFont.truetype(font_path_used, about_font_size)
         else:
+            # Fallback to default font
+            title_font = ImageFont.load_default()
             large_font = ImageFont.load_default()
             medium_font = ImageFont.load_default()
             small_font = ImageFont.load_default()
+            about_font = ImageFont.load_default()
     except:
         title_font = ImageFont.load_default()
         large_font = ImageFont.load_default()
         medium_font = ImageFont.load_default()
         small_font = ImageFont.load_default()
+        about_font = ImageFont.load_default()
     
     # Draw profile picture box (red, large, rounded)
-    pfp_size = 120
-    pfp_x = 40
-    pfp_y = 40
-    pfp_radius = 20
+    # Scale elements for new dimensions
+    scale_factor = CARD_WIDTH / 1000  # Scale from original 1000px width
+    pfp_size = int(140 * scale_factor)  # ~231px
+    pfp_x = CONTENT_X
+    pfp_y = CONTENT_Y
+    pfp_radius = int(20 * scale_factor)  # ~33px
     
     # Create rounded rectangle mask for profile picture
     pfp_mask = Image.new('L', (pfp_size, pfp_size), 0)
@@ -1948,10 +2010,10 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
                              radius=pfp_radius, fill=PROFILE_BOX_COLOR)
     
     # Draw country flag box (green, small, rounded)
-    flag_size = 50
-    flag_x = pfp_x + pfp_size + 20
+    flag_size = int(60 * scale_factor)  # ~99px
+    flag_x = pfp_x + pfp_size + int(25 * scale_factor)
     flag_y = pfp_y
-    flag_radius = 10
+    flag_radius = int(12 * scale_factor)  # ~20px
     
     # Check for country flag (not in DB yet, use default)
     country_flag_url = user_data.get('country_flag_url')
@@ -1970,10 +2032,10 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
                              radius=flag_radius, fill=COUNTRY_BOX_COLOR)
     
     # Draw guild logo box (blue, small, rounded)
-    guild_size = 50
-    guild_x = flag_x + flag_size + 10
+    guild_size = int(60 * scale_factor)  # ~99px
+    guild_x = flag_x + flag_size + int(15 * scale_factor)
     guild_y = pfp_y
-    guild_radius = 10
+    guild_radius = int(12 * scale_factor)  # ~20px
     
     # Check for guild logo
     guild_icon_url = str(guild.icon.url) if guild.icon else None
@@ -1994,22 +2056,23 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
     # Draw level text (top left)
     level = user_data.get('level', 0)
     level_text = f"lvl {level}"
-    draw.text((pfp_x, 10), level_text, fill=TEXT_WHITE, font=title_font)
+    level_y = int(30 * scale_factor)
+    draw.text((CONTENT_X, level_y), level_text, fill=TEXT_COLOR, font=title_font)
     
     # Draw rank text (top right)
     rank = get_user_rank(user.id, guild.id) or 0
     rank_text = f"#{rank}" if rank > 0 else "#-"
     rank_bbox = draw.textbbox((0, 0), rank_text, font=title_font)
     rank_width = rank_bbox[2] - rank_bbox[0]
-    draw.text((CARD_WIDTH - rank_width - 40, 10), rank_text, fill=TEXT_WHITE, font=title_font)
+    draw.text((CARD_WIDTH - rank_width - CONTENT_X, level_y), rank_text, fill=TEXT_COLOR, font=title_font)
     
     # Draw display name and username
     display_name = user.display_name or "-"
-    username = user.name or "-"  # Use .name instead of str(user) to avoid discriminator
+    username = user.name or "-"
     
-    name_y = pfp_y + pfp_size + 15
-    draw.text((pfp_x, name_y), display_name, fill=TEXT_WHITE, font=large_font)
-    draw.text((pfp_x, name_y + 40), f"@{username}", fill=TEXT_GRAY, font=medium_font)
+    name_y = pfp_y + pfp_size + int(20 * scale_factor)
+    draw.text((pfp_x, name_y), display_name, fill=TEXT_COLOR, font=large_font)
+    draw.text((pfp_x, name_y + int(45 * scale_factor)), f"@{username}", fill=TEXT_GRAY, font=medium_font)
     
     # Calculate progress
     current_level = user_data.get('level', 0)
@@ -2027,24 +2090,25 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
         overall_progress = 1.0
     
     # Draw progress bar
-    progress_y = name_y + 90
+    progress_y = name_y + int(100 * scale_factor)
     progress_x = pfp_x
-    progress_width = 600
-    progress_height = 30
-    progress_radius = 8
+    progress_width = int(700 * scale_factor)  # ~1155px
+    progress_height = int(35 * scale_factor)  # ~58px
+    progress_radius = int(10 * scale_factor)  # ~17px
     
-    # Background bar (dark green)
+    # Background bar (matches banner or default)
     draw.rounded_rectangle([(progress_x, progress_y), (progress_x + progress_width, progress_y + progress_height)], 
-                         radius=progress_radius, fill=PROGRESS_BAR_BG)
+                         radius=progress_radius, fill=progress_bar_bg)
     
-    # Filled bar (ash green)
+    # Filled bar (matches banner dominant color or default)
     fill_width = int(progress_width * overall_progress)
     if fill_width > 0:
         draw.rounded_rectangle([(progress_x, progress_y), (progress_x + fill_width, progress_y + progress_height)], 
-                             radius=progress_radius, fill=PROGRESS_BAR_FILL)
+                             radius=progress_radius, fill=progress_bar_fill)
     
     # Progress text
-    draw.text((progress_x + 10, progress_y + 5), "Progress", fill=TEXT_WHITE, font=small_font)
+    progress_text_y = progress_y + int(8 * scale_factor)
+    draw.text((progress_x + int(15 * scale_factor), progress_text_y), "Progress", fill=TEXT_COLOR, font=small_font)
     
     # XP multiplier box
     multiplier = user_data.get('xp_multiplier', 1.0)
@@ -2059,22 +2123,23 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
     total_multiplier = multiplier * quest_multiplier
     
     multiplier_text = f"{total_multiplier:.1f}x"
-    multiplier_box_width = 80
-    multiplier_box_height = 30
-    multiplier_x = progress_x + progress_width + 20
+    multiplier_box_width = int(90 * scale_factor)
+    multiplier_box_height = progress_height
+    multiplier_x = progress_x + progress_width + int(25 * scale_factor)
     multiplier_y = progress_y
     
     draw.rounded_rectangle([(multiplier_x, multiplier_y), (multiplier_x + multiplier_box_width, multiplier_y + multiplier_box_height)], 
-                         radius=8, fill=MULTIPLIER_BOX_COLOR)
+                         radius=progress_radius, fill=MULTIPLIER_BOX_COLOR)
     multiplier_bbox = draw.textbbox((0, 0), multiplier_text, font=small_font)
     multiplier_text_width = multiplier_bbox[2] - multiplier_bbox[0]
     multiplier_text_x = multiplier_x + (multiplier_box_width - multiplier_text_width) // 2
-    draw.text((multiplier_text_x, multiplier_y + 5), multiplier_text, fill=TEXT_WHITE, font=small_font)
+    multiplier_text_y = multiplier_y + int(8 * scale_factor)
+    draw.text((multiplier_text_x, multiplier_text_y), multiplier_text, fill=TEXT_COLOR, font=small_font)
     
     # Draw stats section
-    stats_start_y = progress_y + progress_height + 40
+    stats_start_y = progress_y + progress_height + int(50 * scale_factor)
     stats_x = pfp_x
-    stat_spacing = 50
+    stat_spacing = int(55 * scale_factor)
     
     stats_labels = ["XP", "words", "messages", "vc", "quests"]
     
@@ -2133,44 +2198,45 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
         y_pos = stats_start_y + (i * stat_spacing)
         
         # Label
-        draw.text((stats_x, y_pos), label, fill=TEXT_WHITE, font=small_font)
+        draw.text((stats_x, y_pos), label, fill=TEXT_COLOR, font=small_font)
         
         # Value (overall stat)
-        value_x = stats_x + 120
-        draw.text((value_x, y_pos), value, fill=TEXT_WHITE, font=small_font)
+        value_x = stats_x + int(150 * scale_factor)
+        draw.text((value_x, y_pos), value, fill=TEXT_COLOR, font=small_font)
         
         # Separator and requirement (progress / requirement)
-        req_x = value_x + 120
-        draw.text((req_x, y_pos), "]", fill=TEXT_WHITE, font=small_font)
+        req_x = value_x + int(150 * scale_factor)
+        draw.text((req_x, y_pos), "]", fill=TEXT_COLOR, font=small_font)
         req_text = f"{progress} / {req}"
-        draw.text((req_x + 20, y_pos), req_text, fill=TEXT_WHITE, font=small_font)
+        draw.text((req_x + int(25 * scale_factor), y_pos), req_text, fill=TEXT_COLOR, font=small_font)
     
     # Draw "About me" section
-    about_y = stats_start_y + (len(stats_labels) * stat_spacing) + 30
+    about_y = stats_start_y + (len(stats_labels) * stat_spacing) + int(40 * scale_factor)
     about_x = pfp_x
     
-    # Message icon (white rounded box)
-    icon_size = 30
-    icon_radius = 5
+    # Message icon (white/black rounded box based on background)
+    icon_size = int(35 * scale_factor)
+    icon_radius = int(6 * scale_factor)
+    icon_color = (0, 0, 0) if is_light_bg else (255, 255, 255)
     draw.rounded_rectangle([(about_x, about_y), (about_x + icon_size, about_y + icon_size)], 
-                         radius=icon_radius, fill=MESSAGE_ICON_COLOR)
+                         radius=icon_radius, fill=icon_color)
     
     # "Abouts me" title
-    about_title_x = about_x + icon_size + 10
-    draw.text((about_title_x, about_y), "Abouts me", fill=TEXT_WHITE, font=medium_font)
+    about_title_x = about_x + icon_size + int(12 * scale_factor)
+    draw.text((about_title_x, about_y), "Abouts me", fill=TEXT_COLOR, font=medium_font)
     
     # About me text
     about_text = user_data.get('about_me', '') or ''
     if about_text:
         # Wrap text if too long
-        max_width = CARD_WIDTH - about_x - 40
+        max_width = CONTENT_WIDTH - int(40 * scale_factor)
         words = about_text.split()
         lines = []
         current_line = []
         current_width = 0
         
         for word in words:
-            word_bbox = draw.textbbox((0, 0), word + " ", font=small_font)
+            word_bbox = draw.textbbox((0, 0), word + " ", font=about_font)
             word_width = word_bbox[2] - word_bbox[0]
             if current_width + word_width > max_width and current_line:
                 lines.append(" ".join(current_line))
@@ -2183,10 +2249,11 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
         if current_line:
             lines.append(" ".join(current_line))
         
-        about_text_y = about_y + 35
+        about_text_y = about_y + int(40 * scale_factor)
+        line_height = int(28 * scale_factor)
         for line in lines[:3]:  # Limit to 3 lines
-            draw.text((about_x, about_text_y), line, fill=TEXT_GRAY, font=small_font)
-            about_text_y += 25
+            draw.text((about_x, about_text_y), line, fill=TEXT_GRAY, font=about_font)
+            about_text_y += line_height
     
     # Convert to bytes
     img_bytes = BytesIO()
