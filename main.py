@@ -21,7 +21,7 @@ import requests
 from io import BytesIO
 
 # Bot version - Update this when making changes
-VERSION = "3.1.6"
+VERSION = "3.0.0"
 
 # Flask app for uptime monitoring
 app = Flask('')
@@ -301,10 +301,23 @@ def init_db():
                 else:
                     raise
 
+    # Version 8: Add profile card background color (separate from embed color)
+    if current_version < 8:
+        print("🎨 Adding profile card background color field...")
+        try:
+            c.execute('ALTER TABLE users ADD COLUMN profile_card_bg_color TEXT')
+            print("✅ Added column: profile_card_bg_color")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" in str(e).lower():
+                print("✅ Column profile_card_bg_color already exists, skipping...")
+            else:
+                raise
+
     # Insert/update version info
+    version_to_set = 8 if current_version < 8 else 7 if current_version < 7 else current_version
     c.execute(
         '''INSERT OR REPLACE INTO db_version (version, updated_at)
-                 VALUES (?, ?)''', (7, datetime.datetime.now().isoformat()))
+                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
 
     conn.commit()
     conn.close()
@@ -1814,8 +1827,8 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
     TEXT_WHITE = (255, 255, 255)
     TEXT_GRAY = (180, 180, 180)  # Darker gray for username and about me
     
-    # Get background color (use custom_color, default to gray)
-    bg_color_hex = user_data.get('custom_color', '#808080')
+    # Get background color (use profile_card_bg_color, fallback to custom_color, default to gray)
+    bg_color_hex = user_data.get('profile_card_bg_color') or user_data.get('custom_color', '#808080')
     if bg_color_hex.startswith('#'):
         bg_color_hex = bg_color_hex[1:]
     
@@ -2183,11 +2196,96 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
 
 
 @bot.command(name='me')
-async def me_cmd(ctx, member: discord.Member = None):
-    target = member or ctx.author
-    user_data = get_user_data(target.id, ctx.guild.id)
+async def me_cmd(ctx, action: str = None, *, value: str = None):
+    """Profile card commands. Use: %me [banner <url>|color <hex>|about <text>] or just %me [@user] to view"""
     
-    if not user_data:
+    # Handle subcommands first
+    if action == 'banner':
+        if not value:
+            await ctx.send("❌ Please provide an image URL: `%me banner <image_url>`")
+            return
+        
+        if not value.startswith(('http://', 'https://')):
+            await ctx.send("❌ Please provide a valid image URL!")
+            return
+        
+        # Update background_url for profile card
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''UPDATE users SET background_url = ? WHERE user_id = ? AND guild_id = ?''',
+                  (value, ctx.author.id, ctx.guild.id))
+        conn.commit()
+        conn.close()
+        
+        embed = discord.Embed(title="✅ Profile Card Banner Updated!",
+                              description="Your profile card background image has been set.",
+                              color=discord.Color.green())
+        embed.set_image(url=value)
+        await ctx.send(embed=embed)
+        return
+    
+    elif action == 'color':
+        if not value:
+            await ctx.send("❌ Please provide a hex color: `%me color #FF5733`")
+            return
+        
+        # Validate hex color
+        hex_color = value.strip()
+        if not hex_color.startswith('#'):
+            hex_color = '#' + hex_color
+        
+        if not re.match(r'^#[0-9A-Fa-f]{6}$', hex_color):
+            await ctx.send("❌ Invalid hex color! Use format: `#FF5733` or `FF5733`")
+            return
+        
+        # Update profile_card_bg_color
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''UPDATE users SET profile_card_bg_color = ? WHERE user_id = ? AND guild_id = ?''',
+                  (hex_color, ctx.author.id, ctx.guild.id))
+        conn.commit()
+        conn.close()
+        
+        embed = discord.Embed(title="✅ Profile Card Color Updated!",
+                              description=f"Your profile card background color has been set to `{hex_color}`.",
+                              color=discord.Color.from_str(hex_color))
+        await ctx.send(embed=embed)
+        return
+    
+    elif action == 'about':
+        if value is None:
+            await ctx.send("❌ Please provide your about me text: `%me about <your text>`")
+            return
+        
+        # Update about_me
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''UPDATE users SET about_me = ? WHERE user_id = ? AND guild_id = ?''',
+                  (value, ctx.author.id, ctx.guild.id))
+        conn.commit()
+        conn.close()
+        
+        embed = discord.Embed(title="✅ About Me Updated!",
+                              description="Your profile card about me section has been updated.",
+                              color=discord.Color.green())
+        await ctx.send(embed=embed)
+        return
+    
+    # Default: Show profile card
+    # Check if a member was mentioned in the message
+    target = ctx.author
+    if ctx.message.mentions:
+        target = ctx.message.mentions[0]
+    elif action and action not in ['banner', 'color', 'about']:
+        # Try to parse action as member mention
+        try:
+            target = await commands.MemberConverter().convert(ctx, action)
+        except:
+            target = ctx.author
+    
+    # Get target's data
+    target_data = get_user_data(target.id, ctx.guild.id)
+    if not target_data:
         embed = discord.Embed(
             title=f"{target.display_name}'s Profile",
             description="No data yet! Start chatting to begin your quest.",
@@ -2197,13 +2295,13 @@ async def me_cmd(ctx, member: discord.Member = None):
     
     # Generate profile card
     try:
-        card_image = generate_profile_card(target, user_data, ctx.guild)
+        card_image = generate_profile_card(target, target_data, ctx.guild)
         file = discord.File(card_image, filename='profile_card.png')
         await ctx.send(file=file)
     except Exception as e:
         # Fallback to embed if image generation fails
         await ctx.send(f"❌ Error generating profile card: {str(e)}")
-        await profile_cmd(ctx, member)
+        await profile_cmd(ctx, target if target != ctx.author else None)
 
 
 @bot.command(name='vctest')
