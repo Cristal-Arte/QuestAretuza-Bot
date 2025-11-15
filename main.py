@@ -21,7 +21,7 @@ import requests
 from io import BytesIO
 
 # Bot version - Update this when making changes
-VERSION = "3.0.0"
+VERSION = "3.1.6"
 
 # Flask app for uptime monitoring
 app = Flask('')
