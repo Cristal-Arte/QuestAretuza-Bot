@@ -283,10 +283,28 @@ def init_db():
 
         print("✅ Added sample trivia questions")
 
+    # Version 7: Add profile card fields (about_me and background_url)
+    if current_version < 7:
+        print("🎨 Adding profile card fields...")
+        columns_to_add = [
+            ('about_me', 'TEXT'),
+            ('background_url', 'TEXT')
+        ]
+
+        for col_name, col_type in columns_to_add:
+            try:
+                c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
+                print(f"✅ Added column: {col_name}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" in str(e).lower():
+                    print(f"✅ Column {col_name} already exists, skipping...")
+                else:
+                    raise
+
     # Insert/update version info
     c.execute(
         '''INSERT OR REPLACE INTO db_version (version, updated_at)
-                 VALUES (?, ?)''', (6, datetime.datetime.now().isoformat()))
+                 VALUES (?, ?)''', (7, datetime.datetime.now().isoformat()))
 
     conn.commit()
     conn.close()
@@ -548,6 +566,27 @@ def update_user_data(user_data: Dict):
 
     conn.commit()
     conn.close()
+
+
+def get_user_rank(user_id: int, guild_id: int) -> int:
+    """Get user's rank in the overall leaderboard"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Get all users ordered by level DESC, xp DESC
+    c.execute('''SELECT user_id FROM users 
+                 WHERE guild_id = ? 
+                 ORDER BY level DESC, xp DESC''',
+              (guild_id,))
+    results = c.fetchall()
+    conn.close()
+    
+    # Find the rank (1-indexed)
+    for rank, (uid,) in enumerate(results, 1):
+        if uid == user_id:
+            return rank
+    
+    return 0  # User not found in leaderboard
 
 
 def count_unique_words(text: str) -> int:
@@ -1755,9 +1794,416 @@ async def profile_cmd(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 
+def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.Guild) -> BytesIO:
+    """Generate a profile card image based on the design specifications"""
+    import math
+    
+    # Image dimensions (estimated from design)
+    CARD_WIDTH = 1000
+    CARD_HEIGHT = 600
+    
+    # Colors
+    DEFAULT_BG_COLOR = (128, 128, 128)  # Gray default
+    PROFILE_BOX_COLOR = (255, 0, 0)  # Red for profile picture
+    COUNTRY_BOX_COLOR = (118, 137, 131)  # #758983 default for country
+    GUILD_BOX_COLOR = (118, 137, 131)  # #758983 default for guild
+    PROGRESS_BAR_BG = (84, 107, 81)  # #546b51 dark green
+    PROGRESS_BAR_FILL = (118, 137, 131)  # Ash green (approximate)
+    MULTIPLIER_BOX_COLOR = (84, 107, 81)  # #546b51 dark blue/green
+    MESSAGE_ICON_COLOR = (255, 255, 255)  # White
+    TEXT_WHITE = (255, 255, 255)
+    TEXT_GRAY = (180, 180, 180)  # Darker gray for username and about me
+    
+    # Get background color (use custom_color, default to gray)
+    bg_color_hex = user_data.get('custom_color', '#808080')
+    if bg_color_hex.startswith('#'):
+        bg_color_hex = bg_color_hex[1:]
+    
+    try:
+        bg_r = int(bg_color_hex[0:2], 16)
+        bg_g = int(bg_color_hex[2:4], 16)
+        bg_b = int(bg_color_hex[4:6], 16)
+    except:
+        bg_r, bg_g, bg_b = DEFAULT_BG_COLOR
+    
+    # Calculate brightness and darken if needed (30-50% darkening)
+    brightness = (bg_r * 299 + bg_g * 587 + bg_b * 114) / 1000
+    darken_factor = 0.5 if brightness > 180 else 0.3 if brightness > 120 else 0.0
+    bg_r = int(bg_r * (1 - darken_factor))
+    bg_g = int(bg_g * (1 - darken_factor))
+    bg_b = int(bg_b * (1 - darken_factor))
+    bg_color = (bg_r, bg_g, bg_b)
+    
+    # Helper function to download image
+    def download_image(url: str, size: tuple) -> Image.Image:
+        try:
+            response = requests.get(url, timeout=5)
+            img_data = Image.open(BytesIO(response.content))
+            img_data = img_data.convert('RGB')
+            img_data = img_data.resize(size, Image.Resampling.LANCZOS)
+            return img_data
+        except:
+            return None
+    
+    # Create base image
+    img = Image.new('RGB', (CARD_WIDTH, CARD_HEIGHT), bg_color)
+    draw = ImageDraw.Draw(img)
+    
+    # If background_url is set, try to overlay it (with darkening)
+    background_url = user_data.get('background_url')
+    if background_url:
+        try:
+            bg_img = download_image(background_url, (CARD_WIDTH, CARD_HEIGHT))
+            if bg_img:
+                # Paste background image first
+                img.paste(bg_img, (0, 0))
+                # Apply darkening overlay
+                overlay = Image.new('RGB', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0))
+                overlay_alpha = Image.new('L', (CARD_WIDTH, CARD_HEIGHT), int(255 * darken_factor))
+                img = Image.composite(img, overlay, overlay_alpha)
+                draw = ImageDraw.Draw(img)
+        except:
+            pass  # If background image fails, just use solid color
+    
+    # Try to load Anton font, fallback to default
+    # Note: To use Anton font, place Anton-Regular.ttf in the 'fonts' directory or root directory
+    # Download from: https://fonts.google.com/specimen/Anton
+    try:
+        # Try to load Anton font from system or common locations
+        font_paths = [
+            'fonts/Anton-Regular.ttf',  # Preferred location
+            'Anton-Regular.ttf',  # Root directory
+            './fonts/Anton-Regular.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',  # Linux fallback
+            'C:/Windows/Fonts/arial.ttf',  # Windows fallback
+        ]
+        title_font = None
+        font_path_used = None
+        for path in font_paths:
+            try:
+                if os.path.exists(path):
+                    title_font = ImageFont.truetype(path, 48)
+                    font_path_used = path
+                    break
+            except:
+                continue
+        if not title_font:
+            title_font = ImageFont.load_default()
+        
+        # Smaller fonts - use same font file if available
+        if title_font != ImageFont.load_default() and font_path_used:
+            try:
+                large_font = ImageFont.truetype(font_path_used, 36)
+                medium_font = ImageFont.truetype(font_path_used, 28)
+                small_font = ImageFont.truetype(font_path_used, 24)
+            except:
+                large_font = ImageFont.load_default()
+                medium_font = ImageFont.load_default()
+                small_font = ImageFont.load_default()
+        else:
+            large_font = ImageFont.load_default()
+            medium_font = ImageFont.load_default()
+            small_font = ImageFont.load_default()
+    except:
+        title_font = ImageFont.load_default()
+        large_font = ImageFont.load_default()
+        medium_font = ImageFont.load_default()
+        small_font = ImageFont.load_default()
+    
+    # Draw profile picture box (red, large, rounded)
+    pfp_size = 120
+    pfp_x = 40
+    pfp_y = 40
+    pfp_radius = 20
+    
+    # Create rounded rectangle mask for profile picture
+    pfp_mask = Image.new('L', (pfp_size, pfp_size), 0)
+    pfp_mask_draw = ImageDraw.Draw(pfp_mask)
+    pfp_mask_draw.rounded_rectangle([(0, 0), (pfp_size, pfp_size)], radius=pfp_radius, fill=255)
+    
+    # Try to load profile picture
+    try:
+        pfp_url = str(user.display_avatar.url)
+        pfp_img = download_image(pfp_url, (pfp_size, pfp_size))
+        if pfp_img:
+            img.paste(pfp_img, (pfp_x, pfp_y), pfp_mask)
+        else:
+            draw.rounded_rectangle([(pfp_x, pfp_y), (pfp_x + pfp_size, pfp_y + pfp_size)], 
+                                 radius=pfp_radius, fill=PROFILE_BOX_COLOR)
+    except:
+        draw.rounded_rectangle([(pfp_x, pfp_y), (pfp_x + pfp_size, pfp_y + pfp_size)], 
+                             radius=pfp_radius, fill=PROFILE_BOX_COLOR)
+    
+    # Draw country flag box (green, small, rounded)
+    flag_size = 50
+    flag_x = pfp_x + pfp_size + 20
+    flag_y = pfp_y
+    flag_radius = 10
+    
+    # Check for country flag (not in DB yet, use default)
+    country_flag_url = user_data.get('country_flag_url')
+    if country_flag_url:
+        flag_img = download_image(country_flag_url, (flag_size, flag_size))
+        if flag_img:
+            flag_mask = Image.new('L', (flag_size, flag_size), 0)
+            flag_mask_draw = ImageDraw.Draw(flag_mask)
+            flag_mask_draw.rounded_rectangle([(0, 0), (flag_size, flag_size)], radius=flag_radius, fill=255)
+            img.paste(flag_img, (flag_x, flag_y), flag_mask)
+        else:
+            draw.rounded_rectangle([(flag_x, flag_y), (flag_x + flag_size, flag_y + flag_size)], 
+                                 radius=flag_radius, fill=COUNTRY_BOX_COLOR)
+    else:
+        draw.rounded_rectangle([(flag_x, flag_y), (flag_x + flag_size, flag_y + flag_size)], 
+                             radius=flag_radius, fill=COUNTRY_BOX_COLOR)
+    
+    # Draw guild logo box (blue, small, rounded)
+    guild_size = 50
+    guild_x = flag_x + flag_size + 10
+    guild_y = pfp_y
+    guild_radius = 10
+    
+    # Check for guild logo
+    guild_icon_url = str(guild.icon.url) if guild.icon else None
+    if guild_icon_url:
+        guild_img = download_image(guild_icon_url, (guild_size, guild_size))
+        if guild_img:
+            guild_mask = Image.new('L', (guild_size, guild_size), 0)
+            guild_mask_draw = ImageDraw.Draw(guild_mask)
+            guild_mask_draw.rounded_rectangle([(0, 0), (guild_size, guild_size)], radius=guild_radius, fill=255)
+            img.paste(guild_img, (guild_x, guild_y), guild_mask)
+        else:
+            draw.rounded_rectangle([(guild_x, guild_y), (guild_x + guild_size, guild_y + guild_size)], 
+                                 radius=guild_radius, fill=GUILD_BOX_COLOR)
+    else:
+        draw.rounded_rectangle([(guild_x, guild_y), (guild_x + guild_size, guild_y + guild_size)], 
+                             radius=guild_radius, fill=GUILD_BOX_COLOR)
+    
+    # Draw level text (top left)
+    level = user_data.get('level', 0)
+    level_text = f"lvl {level}"
+    draw.text((pfp_x, 10), level_text, fill=TEXT_WHITE, font=title_font)
+    
+    # Draw rank text (top right)
+    rank = get_user_rank(user.id, guild.id) or 0
+    rank_text = f"#{rank}" if rank > 0 else "#-"
+    rank_bbox = draw.textbbox((0, 0), rank_text, font=title_font)
+    rank_width = rank_bbox[2] - rank_bbox[0]
+    draw.text((CARD_WIDTH - rank_width - 40, 10), rank_text, fill=TEXT_WHITE, font=title_font)
+    
+    # Draw display name and username
+    display_name = user.display_name or "-"
+    username = user.name or "-"  # Use .name instead of str(user) to avoid discriminator
+    
+    name_y = pfp_y + pfp_size + 15
+    draw.text((pfp_x, name_y), display_name, fill=TEXT_WHITE, font=large_font)
+    draw.text((pfp_x, name_y + 40), f"@{username}", fill=TEXT_GRAY, font=medium_font)
+    
+    # Calculate progress
+    current_level = user_data.get('level', 0)
+    next_level = current_level + 1
+    next_req = LevelSystem.get_level_requirements(next_level) if next_level <= 100 else None
+    
+    if next_req:
+        # Calculate progress percentage (average of all requirements)
+        words_progress = min(1.0, user_data.get('unique_words', 0) / max(1, next_req.get('words', 1)))
+        vc_progress = min(1.0, (user_data.get('vc_seconds', 0) / 60) / max(1, next_req.get('vc_minutes', 1)))
+        messages_progress = min(1.0, user_data.get('messages_sent', 0) / max(1, next_req.get('messages', 1)))
+        quests_progress = min(1.0, user_data.get('quests_completed', 0) / max(1, next_req.get('quests', 1)))
+        overall_progress = (words_progress + vc_progress + messages_progress + quests_progress) / 4.0
+    else:
+        overall_progress = 1.0
+    
+    # Draw progress bar
+    progress_y = name_y + 90
+    progress_x = pfp_x
+    progress_width = 600
+    progress_height = 30
+    progress_radius = 8
+    
+    # Background bar (dark green)
+    draw.rounded_rectangle([(progress_x, progress_y), (progress_x + progress_width, progress_y + progress_height)], 
+                         radius=progress_radius, fill=PROGRESS_BAR_BG)
+    
+    # Filled bar (ash green)
+    fill_width = int(progress_width * overall_progress)
+    if fill_width > 0:
+        draw.rounded_rectangle([(progress_x, progress_y), (progress_x + fill_width, progress_y + progress_height)], 
+                             radius=progress_radius, fill=PROGRESS_BAR_FILL)
+    
+    # Progress text
+    draw.text((progress_x + 10, progress_y + 5), "Progress", fill=TEXT_WHITE, font=small_font)
+    
+    # XP multiplier box
+    multiplier = user_data.get('xp_multiplier', 1.0)
+    # Calculate quest multipliers
+    daily_quests = user_data.get('daily_quests_completed', 0)
+    weekly_quests = user_data.get('weekly_quests_completed', 0)
+    quest_multiplier = 1.0
+    if daily_quests > 0:
+        quest_multiplier += 0.1
+    if weekly_quests > 0:
+        quest_multiplier += 0.25
+    total_multiplier = multiplier * quest_multiplier
+    
+    multiplier_text = f"{total_multiplier:.1f}x"
+    multiplier_box_width = 80
+    multiplier_box_height = 30
+    multiplier_x = progress_x + progress_width + 20
+    multiplier_y = progress_y
+    
+    draw.rounded_rectangle([(multiplier_x, multiplier_y), (multiplier_x + multiplier_box_width, multiplier_y + multiplier_box_height)], 
+                         radius=8, fill=MULTIPLIER_BOX_COLOR)
+    multiplier_bbox = draw.textbbox((0, 0), multiplier_text, font=small_font)
+    multiplier_text_width = multiplier_bbox[2] - multiplier_bbox[0]
+    multiplier_text_x = multiplier_x + (multiplier_box_width - multiplier_text_width) // 2
+    draw.text((multiplier_text_x, multiplier_y + 5), multiplier_text, fill=TEXT_WHITE, font=small_font)
+    
+    # Draw stats section
+    stats_start_y = progress_y + progress_height + 40
+    stats_x = pfp_x
+    stat_spacing = 50
+    
+    stats_labels = ["XP", "words", "messages", "vc", "quests"]
+    
+    # Overall/lifetime stats (for middle column display)
+    overall_xp = user_data.get('xp', 0)
+    overall_words = user_data.get('lifetime_words', user_data.get('unique_words', 0))  # Use lifetime if available
+    overall_messages = user_data.get('messages_sent', 0)  # Current value (may be reset on level up)
+    overall_vc = user_data.get('vc_seconds', 0) // 60  # Current value (may be reset on level up)
+    overall_quests = user_data.get('quests_completed', 0)  # Current value (may be reset on level up)
+    
+    stats_values = [
+        f"{overall_xp:,}",
+        f"{overall_words:,}",
+        f"{overall_messages:,}",
+        f"{overall_vc:,}",
+        f"{overall_quests:,}"
+    ]
+    
+    # Current progress values (for right column - progress towards next level)
+    # Note: These represent progress since last level up
+    current_words = user_data.get('unique_words', 0)
+    current_messages = user_data.get('messages_sent', 0)
+    current_vc = user_data.get('vc_seconds', 0) // 60
+    current_quests = user_data.get('quests_completed', 0)
+    
+    # Requirements for next level
+    if next_req:
+        # Calculate XP requirement (based on level requirements)
+        xp_req = next_req.get('words', 0) * 10  # Approximate XP from words
+        req_words = next_req.get('words', 0)
+        req_messages = next_req.get('messages', 0)
+        req_vc = next_req.get('vc_minutes', 0)
+        req_quests = next_req.get('quests', 0)
+        
+        # Current progress towards requirements (capped at requirement)
+        # Note: These are the values since last level up (for progress tracking)
+        # For XP, we'll use a simple calculation based on words progress
+        progress_xp = min(overall_xp, xp_req) if xp_req > 0 else overall_xp
+        progress_words = min(current_words, req_words) if req_words > 0 else current_words
+        progress_messages = min(current_messages, req_messages) if req_messages > 0 else current_messages
+        progress_vc = min(current_vc, req_vc) if req_vc > 0 else current_vc
+        progress_quests = min(current_quests, req_quests) if req_quests > 0 else current_quests
+        
+        stats_requirements = [
+            (f"{progress_xp:,}", f"{xp_req:,}"),
+            (f"{progress_words:,}", f"{req_words:,}"),
+            (f"{progress_messages:,}", f"{req_messages:,}"),
+            (f"{progress_vc:,}", f"{req_vc:,}"),
+            (f"{progress_quests:,}", f"{req_quests:,}")
+        ]
+    else:
+        # Max level reached
+        stats_requirements = [("-", "-")] * 5
+    
+    for i, (label, value, (progress, req)) in enumerate(zip(stats_labels, stats_values, stats_requirements)):
+        y_pos = stats_start_y + (i * stat_spacing)
+        
+        # Label
+        draw.text((stats_x, y_pos), label, fill=TEXT_WHITE, font=small_font)
+        
+        # Value (overall stat)
+        value_x = stats_x + 120
+        draw.text((value_x, y_pos), value, fill=TEXT_WHITE, font=small_font)
+        
+        # Separator and requirement (progress / requirement)
+        req_x = value_x + 120
+        draw.text((req_x, y_pos), "]", fill=TEXT_WHITE, font=small_font)
+        req_text = f"{progress} / {req}"
+        draw.text((req_x + 20, y_pos), req_text, fill=TEXT_WHITE, font=small_font)
+    
+    # Draw "About me" section
+    about_y = stats_start_y + (len(stats_labels) * stat_spacing) + 30
+    about_x = pfp_x
+    
+    # Message icon (white rounded box)
+    icon_size = 30
+    icon_radius = 5
+    draw.rounded_rectangle([(about_x, about_y), (about_x + icon_size, about_y + icon_size)], 
+                         radius=icon_radius, fill=MESSAGE_ICON_COLOR)
+    
+    # "Abouts me" title
+    about_title_x = about_x + icon_size + 10
+    draw.text((about_title_x, about_y), "Abouts me", fill=TEXT_WHITE, font=medium_font)
+    
+    # About me text
+    about_text = user_data.get('about_me', '') or ''
+    if about_text:
+        # Wrap text if too long
+        max_width = CARD_WIDTH - about_x - 40
+        words = about_text.split()
+        lines = []
+        current_line = []
+        current_width = 0
+        
+        for word in words:
+            word_bbox = draw.textbbox((0, 0), word + " ", font=small_font)
+            word_width = word_bbox[2] - word_bbox[0]
+            if current_width + word_width > max_width and current_line:
+                lines.append(" ".join(current_line))
+                current_line = [word]
+                current_width = word_width
+            else:
+                current_line.append(word)
+                current_width += word_width
+        
+        if current_line:
+            lines.append(" ".join(current_line))
+        
+        about_text_y = about_y + 35
+        for line in lines[:3]:  # Limit to 3 lines
+            draw.text((about_x, about_text_y), line, fill=TEXT_GRAY, font=small_font)
+            about_text_y += 25
+    
+    # Convert to bytes
+    img_bytes = BytesIO()
+    img.save(img_bytes, format='PNG')
+    img_bytes.seek(0)
+    return img_bytes
+
+
 @bot.command(name='me')
-async def me_cmd(ctx):
-    await profile_cmd(ctx, None)
+async def me_cmd(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    user_data = get_user_data(target.id, ctx.guild.id)
+    
+    if not user_data:
+        embed = discord.Embed(
+            title=f"{target.display_name}'s Profile",
+            description="No data yet! Start chatting to begin your quest.",
+            color=discord.Color.blurple())
+        await ctx.send(embed=embed)
+        return
+    
+    # Generate profile card
+    try:
+        card_image = generate_profile_card(target, user_data, ctx.guild)
+        file = discord.File(card_image, filename='profile_card.png')
+        await ctx.send(file=file)
+    except Exception as e:
+        # Fallback to embed if image generation fails
+        await ctx.send(f"❌ Error generating profile card: {str(e)}")
+        await profile_cmd(ctx, member)
 
 
 @bot.command(name='vctest')
