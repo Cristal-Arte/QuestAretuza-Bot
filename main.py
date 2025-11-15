@@ -21,7 +21,7 @@ import requests
 from io import BytesIO
 
 # Bot version - Update this when making changes
-VERSION = "3.2.2"
+VERSION = "4.0.1"
 
 # Flask app for uptime monitoring
 app = Flask('')
@@ -313,8 +313,28 @@ def init_db():
             else:
                 raise
 
+    # Version 9: Add profile card customization fields
+    if current_version < 9:
+        print("🎨 Adding profile card customization fields...")
+        columns_to_add = [
+            ('banner_brightness', 'REAL DEFAULT 0.0'),  # 0-100% darkness
+            ('card_padding', 'REAL DEFAULT 1.2'),  # Multiplier for padding (default 3x = 1.2 inches)
+            ('card_font_size', 'REAL DEFAULT 33.0'),  # Font size multiplier
+            ('custom_pfp_url', 'TEXT'),  # Custom profile picture URL
+        ]
+        
+        for col_name, col_type in columns_to_add:
+            try:
+                c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
+                print(f"✅ Added column: {col_name}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" in str(e).lower():
+                    print(f"✅ Column {col_name} already exists, skipping...")
+                else:
+                    raise
+
     # Insert/update version info
-    version_to_set = 8 if current_version < 8 else 7 if current_version < 7 else current_version
+    version_to_set = 9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version)
     c.execute(
         '''INSERT OR REPLACE INTO db_version (version, updated_at)
                  VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
@@ -1812,16 +1832,20 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
     import math
     from collections import Counter
     
-    # Image dimensions: 11x8 inches at 150 DPI for good quality
+    # Image dimensions: Portrait orientation (8x11 inches at 150 DPI)
     DPI = 150
-    CARD_WIDTH = int(11 * DPI)  # 1650 pixels
-    CARD_HEIGHT = int(8 * DPI)  # 1200 pixels
+    CARD_WIDTH = int(8 * DPI)   # 1200 pixels (portrait width)
+    CARD_HEIGHT = int(11 * DPI) # 1650 pixels (portrait height)
     
-    # Padding in inches, converted to pixels
-    PADDING_LEFT = int(0.4 * DPI)   # ~0.4 inch = 60px
-    PADDING_RIGHT = int(0.4 * DPI)  # ~0.4 inch = 60px
-    PADDING_TOP = int(0.9 * DPI)    # ~0.9 inch = 135px
-    PADDING_BOTTOM = int(0.9 * DPI) # ~0.9 inch = 135px
+    # Padding multiplier from user settings (default 3x = 1.2 inches base)
+    padding_multiplier = user_data.get('card_padding', 1.2) or 1.2
+    base_padding = 0.4  # Base padding in inches
+    
+    # Padding in inches, converted to pixels (3x default)
+    PADDING_LEFT = int(base_padding * padding_multiplier * DPI)
+    PADDING_RIGHT = int(base_padding * padding_multiplier * DPI)
+    PADDING_TOP = int(base_padding * padding_multiplier * DPI)
+    PADDING_BOTTOM = int(base_padding * padding_multiplier * DPI)
     
     # Content area
     CONTENT_X = PADDING_LEFT
@@ -1887,11 +1911,7 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
     # Calculate brightness for text color decision
     bg_brightness = (bg_r * 299 + bg_g * 587 + bg_b * 114) / 1000
     
-    # Reduced darkening: 10-20% only
-    darken_factor = 0.2 if bg_brightness > 200 else 0.15 if bg_brightness > 150 else 0.1 if bg_brightness > 100 else 0.0
-    bg_r = int(bg_r * (1 - darken_factor))
-    bg_g = int(bg_g * (1 - darken_factor))
-    bg_b = int(bg_b * (1 - darken_factor))
+    # No default darkening (0%)
     bg_color = (bg_r, bg_g, bg_b)
     
     # Determine text colors based on background brightness
@@ -1908,9 +1928,12 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
     img = Image.new('RGB', (CARD_WIDTH, CARD_HEIGHT), bg_color)
     draw = ImageDraw.Draw(img)
     
-    # If background_url is set, try to overlay it (with minimal darkening)
+    # If background_url is set, try to overlay it (with user-defined darkening)
     background_url = user_data.get('background_url')
     banner_img = None
+    banner_brightness_value = user_data.get('banner_brightness', 0.0) or 0.0  # 0-100%
+    darken_factor = banner_brightness_value / 100.0  # Convert to 0.0-1.0
+    
     if background_url:
         try:
             bg_img = download_image(background_url, (CARD_WIDTH, CARD_HEIGHT))
@@ -1924,10 +1947,11 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
                 
                 # Paste background image first
                 img.paste(bg_img, (0, 0))
-                # Apply minimal darkening overlay (10-20%)
-                overlay = Image.new('RGB', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0))
-                overlay_alpha = Image.new('L', (CARD_WIDTH, CARD_HEIGHT), int(255 * darken_factor))
-                img = Image.composite(img, overlay, overlay_alpha)
+                # Apply user-defined darkening overlay (0-100%)
+                if darken_factor > 0:
+                    overlay = Image.new('RGB', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0))
+                    overlay_alpha = Image.new('L', (CARD_WIDTH, CARD_HEIGHT), int(255 * darken_factor))
+                    img = Image.composite(img, overlay, overlay_alpha)
                 draw = ImageDraw.Draw(img)
                 
                 # Extract dominant color from banner for progress bar
@@ -1961,9 +1985,17 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
                 continue
         
         if font_path_used:
-            # Canva size 12 equivalent (scaled for quality)
-            main_font_size = int(16 * (DPI / 72))  # ~33px at 150 DPI
-            about_font_size = int(11 * (DPI / 72))  # ~23px at 150 DPI (Canva size 8)
+            # Get user-defined font size (default 3x larger = 99px)
+            # If user hasn't set a custom size, use 3x default (99px)
+            custom_font_size = user_data.get('card_font_size')
+            if custom_font_size is None:
+                # Default: 3x larger than original (33px * 3 = 99px)
+                main_font_size = 99
+            else:
+                # User has set a custom size, use it directly (clamped 5-999)
+                main_font_size = int(max(5, min(999, custom_font_size)))
+            about_font_size = int(main_font_size * 0.73)  # About 73% of main size for about me
+            
             title_font = ImageFont.truetype(font_path_used, main_font_size)
             large_font = ImageFont.truetype(font_path_used, main_font_size)
             medium_font = ImageFont.truetype(font_path_used, main_font_size)
@@ -1996,9 +2028,10 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
     pfp_mask_draw = ImageDraw.Draw(pfp_mask)
     pfp_mask_draw.rounded_rectangle([(0, 0), (pfp_size, pfp_size)], radius=pfp_radius, fill=255)
     
-    # Try to load profile picture
+    # Try to load profile picture (custom or default)
     try:
-        pfp_url = str(user.display_avatar.url)
+        custom_pfp_url = user_data.get('custom_pfp_url')
+        pfp_url = custom_pfp_url if custom_pfp_url else str(user.display_avatar.url)
         pfp_img = download_image(pfp_url, (pfp_size, pfp_size))
         if pfp_img:
             img.paste(pfp_img, (pfp_x, pfp_y), pfp_mask)
@@ -2106,8 +2139,10 @@ def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.
         draw.rounded_rectangle([(progress_x, progress_y), (progress_x + fill_width, progress_y + progress_height)], 
                              radius=progress_radius, fill=progress_bar_fill)
     
-    # Progress text
-    progress_text_y = progress_y + int(8 * scale_factor)
+    # Progress text (vertically centered)
+    progress_text_bbox = draw.textbbox((0, 0), "Progress", font=small_font)
+    progress_text_height = progress_text_bbox[3] - progress_text_bbox[1]
+    progress_text_y = progress_y + (progress_height - progress_text_height) // 2
     draw.text((progress_x + int(15 * scale_factor), progress_text_y), "Progress", fill=TEXT_COLOR, font=small_font)
     
     # XP multiplier box
@@ -2338,12 +2373,120 @@ async def me_cmd(ctx, action: str = None, *, value: str = None):
         await ctx.send(embed=embed)
         return
     
+    elif action == 'brightness':
+        if not value:
+            await ctx.send("❌ Please provide a brightness value (0-100): `%me brightness 20`")
+            return
+        
+        try:
+            brightness = float(value)
+            if brightness < 0 or brightness > 100:
+                await ctx.send("❌ Brightness must be between 0 and 100!")
+                return
+            
+            # Update banner_brightness
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''UPDATE users SET banner_brightness = ? WHERE user_id = ? AND guild_id = ?''',
+                      (brightness, ctx.author.id, ctx.guild.id))
+            conn.commit()
+            conn.close()
+            
+            embed = discord.Embed(title="✅ Banner Brightness Updated!",
+                                  description=f"Your banner darkness has been set to {brightness}%.",
+                                  color=discord.Color.green())
+            await ctx.send(embed=embed)
+            return
+        except ValueError:
+            await ctx.send("❌ Please provide a valid number between 0 and 100!")
+            return
+    
+    elif action == 'padding':
+        if not value:
+            await ctx.send("❌ Please provide a padding multiplier: `%me padding 1.5`")
+            return
+        
+        try:
+            padding = float(value)
+            if padding < 0.1 or padding > 10:
+                await ctx.send("❌ Padding multiplier must be between 0.1 and 10!")
+                return
+            
+            # Update card_padding
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''UPDATE users SET card_padding = ? WHERE user_id = ? AND guild_id = ?''',
+                      (padding, ctx.author.id, ctx.guild.id))
+            conn.commit()
+            conn.close()
+            
+            embed = discord.Embed(title="✅ Card Padding Updated!",
+                                  description=f"Your card padding has been set to {padding}x.",
+                                  color=discord.Color.green())
+            await ctx.send(embed=embed)
+            return
+        except ValueError:
+            await ctx.send("❌ Please provide a valid number!")
+            return
+    
+    elif action == 'fontsize':
+        if not value:
+            await ctx.send("❌ Please provide a font size (5-999): `%me fontsize 50`")
+            return
+        
+        try:
+            font_size = float(value)
+            if font_size < 5 or font_size > 999:
+                await ctx.send("❌ Font size must be between 5 and 999!")
+                return
+            
+            # Update card_font_size
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''UPDATE users SET card_font_size = ? WHERE user_id = ? AND guild_id = ?''',
+                      (font_size, ctx.author.id, ctx.guild.id))
+            conn.commit()
+            conn.close()
+            
+            embed = discord.Embed(title="✅ Font Size Updated!",
+                                  description=f"Your card font size has been set to {font_size}.",
+                                  color=discord.Color.green())
+            await ctx.send(embed=embed)
+            return
+        except ValueError:
+            await ctx.send("❌ Please provide a valid number between 5 and 999!")
+            return
+    
+    elif action == 'pfp':
+        if not value:
+            await ctx.send("❌ Please provide an image URL: `%me pfp <image_url>`")
+            return
+        
+        if not value.startswith(('http://', 'https://')):
+            await ctx.send("❌ Please provide a valid image URL!")
+            return
+        
+        # Update custom_pfp_url
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''UPDATE users SET custom_pfp_url = ? WHERE user_id = ? AND guild_id = ?''',
+                  (value, ctx.author.id, ctx.guild.id))
+        conn.commit()
+        conn.close()
+        
+        embed = discord.Embed(title="✅ Profile Picture Updated!",
+                              description="Your profile card picture has been set.",
+                              color=discord.Color.green())
+        embed.set_image(url=value)
+        await ctx.send(embed=embed)
+        return
+    
     # Default: Show profile card
     # Check if a member was mentioned in the message
     target = ctx.author
     if ctx.message.mentions:
         target = ctx.message.mentions[0]
-    elif action and action not in ['banner', 'color', 'about']:
+    elif action and action not in ['banner', 'color', 'about', 'brightness', 'padding', 'fontsize', 'pfp']:
         # Try to parse action as member mention
         try:
             target = await commands.MemberConverter().convert(ctx, action)
@@ -2688,7 +2831,15 @@ async def help_cmd(ctx):
         color=discord.Color.blurple())
 
     commands_list = {
-        "%profile [user]": "View your or someone else's profile",
+        "%me [@user]": "View your profile card (image)",
+        "%me banner <url>": "Set profile card background image",
+        "%me color <hex>": "Set profile card background color",
+        "%me brightness <0-100>": "Adjust banner darkness (0% = no darkening)",
+        "%me padding <multiplier>": "Adjust card padding (default: 1.2x)",
+        "%me fontsize <5-999>": "Adjust card font size (default: 33)",
+        "%me pfp <url>": "Set custom profile picture for card",
+        "%me about <text>": "Set your about me text",
+        "%profile [user]": "View your or someone else's profile (embed)",
         "%quests [type] [page]": "View available quests (daily/weekly/achievement/special)",
         "%claim <quest_id>": "Manually claim quest reward (100% XP)",
         "%claimall": "Claim all completed quests at once (85% XP, 15% fee)",
@@ -2696,12 +2847,12 @@ async def help_cmd(ctx):
         "%questprogress <quest_id>": "Check progress on a specific quest",
         "%vctest": "Test your VC time tracking",
         "%debug": "Check your current stats and progress",
-        "%banner <url>": "Set profile banner (Level 1+)",
-        "%color <hex>": "Change profile color",
-        "%leaderboard [category] [page]":
-        "View leaderboards (overall/words/vc/quests/xp)",
+        "%banner <url>": "Set profile banner for embed (Level 1+)",
+        "%color <hex>": "Change profile color for embed",
+        "%leaderboard [category] [page]": "View leaderboards (overall/words/vc/quests/xp)",
         "%version": "Check bot version and changelog",
-        "%guide": "Learn how the bot works"
+        "%guide": "Learn how the bot works",
+        "%admin help": "View admin-only commands"
     }
 
     embed.add_field(
@@ -2770,9 +2921,63 @@ async def guide_cmd(ctx):
     • Level 1: Unlock banner
     • Custom colors anytime
     • Show off your progress!
+    
+    **🎨 Profile Card Commands (`%me`)**
+    • `%me` - View your profile card (beautiful image!)
+    • `%me banner <url>` - Set background image/GIF
+    • `%me color <hex>` - Set background color
+    • `%me brightness <0-100>` - Adjust banner darkness (0% = original image)
+    • `%me padding <multiplier>` - Adjust card padding (default: 1.2x)
+    • `%me fontsize <5-999>` - Adjust font size (default: 33)
+    • `%me pfp <url>` - Set custom profile picture
+    • `%me about <text>` - Set your about me text
+    
+    **💡 Tips:**
+    • Profile cards are portrait-oriented (8x11 inches)
+    • Progress bar color matches your banner automatically
+    • Text color adapts to background brightness
+    • All settings are separate from embed profile!
     """
 
     embed.description = guide_text
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='admin')
+async def admin_cmd(ctx, action: str = None):
+    """Admin commands help"""
+    if action != 'help':
+        await ctx.send("❌ Use `%admin help` to view admin commands.")
+        return
+    
+    # Check if user has administrator permissions
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ You need administrator permissions to view this!")
+        return
+    
+    embed = discord.Embed(
+        title="🔐 Admin Commands",
+        description="Commands available only to administrators",
+        color=discord.Color.red())
+    
+    admin_commands = {
+        "%synchistory [user]": "Sync message history for a user (admin only)",
+        "%forcevc <user> <seconds>": "Force add VC time to a user (admin only)",
+        "%forcelevel <user> <level>": "Force set a user's level (admin only)",
+        "%forcexp <user> <amount>": "Force add XP to a user (admin only)",
+        "%forcewords <user> <amount>": "Force add words to a user (admin only)",
+        "%forcemessages <user> <amount>": "Force add messages to a user (admin only)",
+        "%forcequests <user> <amount>": "Force add quests completed to a user (admin only)",
+        "%trivia <action>": "Manage trivia questions and sessions (admin only)",
+        "%testweekly [user]": "Test weekly quest reset (admin only)",
+        "%testlevel [user]": "Test leveling system calculations (admin only)",
+        "%testall [user]": "Run all tracker tests (admin only)",
+    }
+    
+    for cmd, desc in admin_commands.items():
+        embed.add_field(name=cmd, value=desc, inline=False)
+    
+    embed.set_footer(text="⚠️ Use these commands responsibly!")
     await ctx.send(embed=embed)
 
 
