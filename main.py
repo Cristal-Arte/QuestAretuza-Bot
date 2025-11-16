@@ -6268,8 +6268,7 @@ if 'study' not in bot.all_commands:
         embed.add_field(name="Subject", value=subject or "Not specified", inline=True)
         embed.add_field(name="Duration", value=duration_str, inline=True)
         embed.add_field(name="Planned", value=f"{intended_duration} minutes", inline=True)
-
-        await ctx.send(embed=embed)
+await ctx.send(embed=embed)
 
 @study_group.command(name='status')
 async def study_status(ctx):
