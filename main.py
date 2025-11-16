@@ -6206,128 +6206,17 @@ if 'study' not in bot.all_commands:
             inline=False
         )
         await ctx.send(embed=embed)
-else:
-    print("⚠️  'study' command group already registered — skipping.")
+
+    @study_group.command(name='start')
+    async def study_start(ctx, session_type: str = None, duration: int = None):
+        """Start a new study session - Usage: %study start [type] [duration_minutes]
+
+        Types: practice, test, reading, other
+        For tests: %study start test <minutes>
+        For practice: %study start practice
+        """
 
 
-@study_group.command(name='start')
-async def study_start(ctx, session_type: str = None, duration: int = None):
-    """Start a new study session - Usage: %study start [type] [duration_minutes]
-
-    Types: practice, test, reading, other
-    For tests: %study start test <minutes>
-    For practice: %study start practice
-    """
-
-    # Check if user already has an active session
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('''SELECT session_id FROM study_sessions
-                  WHERE user_id = ? AND guild_id = ?''',
-              (ctx.author.id, ctx.guild.id))
-    existing_session = c.fetchone()
-    conn.close()
-
-    if existing_session:
-        embed = discord.Embed(
-            title="❌ Session Already Active",
-            description="You already have an active study session. Use `%study stop` to end it first.",
-            color=discord.Color.red()
-        )
-        await ctx.send(embed=embed)
-        return
-
-    # Direct mode: if type and duration provided
-    if session_type and duration:
-        # Validate inputs
-        valid_types = ['practice', 'test', 'reading', 'other']
-        if session_type.lower() not in valid_types:
-            await ctx.send(f"❌ Invalid session type! Valid types: {', '.join(valid_types)}")
-            return
-
-        if duration <= 0 or duration > 480:  # Max 8 hours
-            await ctx.send("❌ Duration must be between 1 and 480 minutes!")
-            return
-
-        # Map to internal types
-        type_mapping = {
-            'practice': 'MCQ Practice',
-            'test': 'MCQ Test',
-            'reading': 'Reading',
-            'other': 'Other'
-        }
-        study_type = type_mapping[session_type.lower()]
-
-        # Start session directly
-        session_id = f"{ctx.author.id}_{int(datetime.datetime.now().timestamp())}"
-
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute('''INSERT INTO study_sessions
-                      (user_id, guild_id, session_id, study_type, subject, mood,
-                       intended_duration, start_time, last_activity)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (ctx.author.id, ctx.guild.id, session_id,
-                   study_type, f"{study_type} Session", "Focused",
-                   duration, datetime.datetime.now().isoformat(),
-                   datetime.datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-
-        # Send confirmation
-        embed = discord.Embed(
-            title="🚀 Study Session Started!",
-            description=f"Your {study_type.lower()} session has begun!",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="Type", value=study_type, inline=True)
-        embed.add_field(name="Duration", value=f"{duration} minutes", inline=True)
-        embed.add_field(name="Session ID", value=f"`{session_id}`", inline=True)
-
-        if study_type == "MCQ Test":
-            embed.add_field(
-                name="⏰ Test Mode Active",
-                value=f"This test will automatically end in {duration} minutes.\n"
-                      "Answers are auto-saved as you submit them.",
-                inline=False
-            )
-
-        embed.add_field(
-            name="Commands",
-            value="• Use `%study stop` to end the session early\n"
-                  "• Use `%study status` to check progress\n"
-                  "• Submit answers naturally (e.g., 'Answer: B' or 'I think it's C')",
-            inline=False
-        )
-
-        await ctx.send(embed=embed)
-        return
-
-    # Interactive setup mode (original behavior)
-    embed = discord.Embed(
-        title="📚 Study Session Setup",
-        description="Let's set up your study session!",
-        color=discord.Color.green()
-    )
-    embed.add_field(
-        name="Question 1/4",
-        value="What type of study session is this?\n• **MCQ Practice**\n• **MCQ Test**\n• **Reading**\n• **Other**",
-        inline=False
-    )
-
-    setup_msg = await ctx.send(embed=embed)
-
-    # Store setup state
-    study_setup_states[ctx.author.id] = {
-        'step': 1,
-        'message': setup_msg,
-        'data': {}
-    }
-
-
-@study_group.command(name='stop')
-async def study_stop(ctx):
-    """Stop the current study session"""
     conn = get_db_connection()
     c = conn.cursor()
 
@@ -6335,15 +6224,6 @@ async def study_stop(ctx):
     c.execute('''SELECT session_id, start_time, intended_duration, study_type, subject
                  FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
               (ctx.author.id, ctx.guild.id))
-    session_data = c.fetchone()
-
-    if not session_data:
-        await ctx.send("❌ You don't have an active study session!")
-        conn.close()
-        return
-
-    session_id, start_time_str, intended_duration, study_type, subject = session_data
-    start_time = datetime.datetime.fromisoformat(start_time_str)
     actual_duration = int((datetime.datetime.now() - start_time).total_seconds())
 
     # Move to history
