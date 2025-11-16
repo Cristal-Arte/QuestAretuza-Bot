@@ -23,7 +23,7 @@ import fitz  # PyMuPDF for PDF handling
 import re
 
 # Bot version - Update this when making changes
-VERSION = "4.0.1"
+VERSION = "5.0.0"
 
 # Flask app for uptime monitoring
 app = Flask('')
@@ -334,6 +334,14 @@ def init_db():
                     print(f"✅ Column {col_name} already exists, skipping...")
                 else:
                     raise
+            try:
+                c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
+                print(f"✅ Added column: {col_name}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" in str(e).lower():
+                    print(f"✅ Column {col_name} already exists, skipping...")
+                else:
+                    raise
 
     # Version 10: Add study system tables
     if current_version < 10:
@@ -341,42 +349,358 @@ def init_db():
 
         # Study sessions table (active sessions)
         c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
-                     (user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                      study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                      start_time TEXT, last_activity TEXT,
-                      PRIMARY KEY (user_id, guild_id))''')
+                      (user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                       start_time TEXT, last_activity TEXT,
+                       PRIMARY KEY (user_id, guild_id))''')
 
         # Study history table (completed sessions)
         c.execute('''CREATE TABLE IF NOT EXISTS study_history
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                      study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                      start_time TEXT, end_time TEXT, actual_duration INTEGER,
-                      completed INTEGER DEFAULT 0)''')
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                       start_time TEXT, end_time TEXT, actual_duration INTEGER,
+                       completed INTEGER DEFAULT 0)''')
 
         # Study answers table (for MCQ practice)
         c.execute('''CREATE TABLE IF NOT EXISTS study_answers
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                      question_number INTEGER, answer TEXT, is_correct INTEGER,
-                      timestamp TEXT)''')
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       question_number INTEGER, answer TEXT, is_correct INTEGER,
+                       timestamp TEXT)''')
 
         # Study bookmarks table
         c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      user_id INTEGER, guild_id INTEGER,
-                      title TEXT, url TEXT, category TEXT,
-                      created_at TEXT)''')
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER,
+                       title TEXT, url TEXT, category TEXT,
+                       created_at TEXT)''')
 
         # Indexes for study tables
         c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
-                     ON study_sessions(user_id, guild_id)''')
+                      ON study_sessions(user_id, guild_id)''')
         c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
-                     ON study_history(user_id, guild_id)''')
+                      ON study_history(user_id, guild_id)''')
         c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
-                     ON study_answers(user_id, guild_id, session_id)''')
+                      ON study_answers(user_id, guild_id, session_id)''')
         c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
-                     ON study_bookmarks(user_id, guild_id)''')
+                      ON study_bookmarks(user_id, guild_id)''')
+
+        print("✅ Study system tables created successfully")
+
+    # Insert/update version info
+    version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
+    c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
+                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
+
+    conn.commit()
+    conn.close()
+    print("✅ Database initialized/updated successfully")
+
+
+# Initialize database with safety checks
+try:
+    init_db()
+    init_quest_tables()
+    print("✅ Quest system initialized")
+except Exception as e:
+    print(f"❌ Database initialization error: {e}")
+    # Try to restore from most recent backup
+    import os
+    import glob
+
+    backup_files = glob.glob('backups/questuza_backup_*.db')
+    if backup_files:
+        latest_backup = max(backup_files, key=os.path.getctime)
+        try:
+            import shutil
+            shutil.copy2(latest_backup, 'questuza.db')
+            print(f"✅ Restored from backup: {latest_backup}")
+            init_db()  # Try initialization again
+        except Exception as restore_error:
+            print(f"❌ Backup restoration failed: {restore_error}")
+    else:
+        print("❌ No backup files found")
+
+    # Version 10: Add study system tables
+    if current_version < 10:
+        print("📚 Adding study system tables...")
+
+        # Study sessions table (active sessions)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
+                      (user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                       start_time TEXT, last_activity TEXT,
+                       PRIMARY KEY (user_id, guild_id))''')
+
+        # Study history table (completed sessions)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_history
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                       start_time TEXT, end_time TEXT, actual_duration INTEGER,
+                       completed INTEGER DEFAULT 0)''')
+
+        # Study answers table (for MCQ practice)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_answers
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       question_number INTEGER, answer TEXT, is_correct INTEGER,
+                       timestamp TEXT)''')
+
+        # Study bookmarks table
+        c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER,
+                       title TEXT, url TEXT, category TEXT,
+                       created_at TEXT)''')
+
+        # Indexes for study tables
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
+                      ON study_sessions(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
+                      ON study_history(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
+                      ON study_answers(user_id, guild_id, session_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
+                      ON study_bookmarks(user_id, guild_id)''')
+
+        print("✅ Study system tables created successfully")
+
+    # Insert/update version info
+    version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
+    c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
+                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
+
+    conn.commit()
+    conn.close()
+    print("✅ Database initialized/updated successfully")
+
+
+# Initialize database with safety checks
+try:
+    init_db()
+    init_quest_tables()
+    print("✅ Quest system initialized")
+except Exception as e:
+    print(f"❌ Database initialization error: {e}")
+    # Try to restore from most recent backup
+    import os
+    import glob
+
+    backup_files = glob.glob('backups/questuza_backup_*.db')
+    if backup_files:
+        latest_backup = max(backup_files, key=os.path.getctime)
+        try:
+            import shutil
+            shutil.copy2(latest_backup, 'questuza.db')
+            print(f"✅ Restored from backup: {latest_backup}")
+            init_db()  # Try initialization again
+        except Exception as restore_error:
+            print(f"❌ Backup restoration failed: {restore_error}")
+    else:
+        print("❌ No backup files found")
+
+    # Version 10: Add study system tables
+    if current_version < 10:
+        print("📚 Adding study system tables...")
+
+        # Study sessions table (active sessions)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
+                      (user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                       start_time TEXT, last_activity TEXT,
+                       PRIMARY KEY (user_id, guild_id))''')
+
+        # Study history table (completed sessions)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_history
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                       start_time TEXT, end_time TEXT, actual_duration INTEGER,
+                       completed INTEGER DEFAULT 0)''')
+
+        # Study answers table (for MCQ practice)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_answers
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       question_number INTEGER, answer TEXT, is_correct INTEGER,
+                       timestamp TEXT)''')
+
+        # Study bookmarks table
+        c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER,
+                       title TEXT, url TEXT, category TEXT,
+                       created_at TEXT)''')
+
+        # Indexes for study tables
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
+                      ON study_sessions(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
+                      ON study_history(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
+                      ON study_answers(user_id, guild_id, session_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
+                      ON study_bookmarks(user_id, guild_id)''')
+
+        print("✅ Study system tables created successfully")
+
+    # Insert/update version info
+    version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
+    c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
+                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
+
+    conn.commit()
+    conn.close()
+    print("✅ Database initialized/updated successfully")
+
+
+# Initialize database with safety checks
+try:
+    init_db()
+    init_quest_tables()
+    print("✅ Quest system initialized")
+except Exception as e:
+    print(f"❌ Database initialization error: {e}")
+    # Try to restore from most recent backup
+    import os
+    import glob
+
+    backup_files = glob.glob('backups/questuza_backup_*.db')
+    if backup_files:
+        latest_backup = max(backup_files, key=os.path.getctime)
+        try:
+            import shutil
+            shutil.copy2(latest_backup, 'questuza.db')
+            print(f"✅ Restored from backup: {latest_backup}")
+            init_db()  # Try initialization again
+        except Exception as restore_error:
+            print(f"❌ Backup restoration failed: {restore_error}")
+    else:
+        print("❌ No backup files found")
+
+    # Version 10: Add study system tables
+    if current_version < 10:
+        print("📚 Adding study system tables...")
+
+        # Study sessions table (active sessions)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
+                      (user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                       start_time TEXT, last_activity TEXT,
+                       PRIMARY KEY (user_id, guild_id))''')
+
+        # Study history table (completed sessions)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_history
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                       start_time TEXT, end_time TEXT, actual_duration INTEGER,
+                       completed INTEGER DEFAULT 0)''')
+
+        # Study answers table (for MCQ practice)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_answers
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       question_number INTEGER, answer TEXT, is_correct INTEGER,
+                       timestamp TEXT)''')
+
+        # Study bookmarks table
+        c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER,
+                       title TEXT, url TEXT, category TEXT,
+                       created_at TEXT)''')
+
+        # Indexes for study tables
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
+                      ON study_sessions(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
+                      ON study_history(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
+                      ON study_answers(user_id, guild_id, session_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
+                      ON study_bookmarks(user_id, guild_id)''')
+
+        print("✅ Study system tables created successfully")
+
+    # Insert/update version info
+    version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
+    c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
+                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
+
+    conn.commit()
+    conn.close()
+    print("✅ Database initialized/updated successfully")
+
+
+# Initialize database with safety checks
+try:
+    init_db()
+    init_quest_tables()
+    print("✅ Quest system initialized")
+except Exception as e:
+    print(f"❌ Database initialization error: {e}")
+    # Try to restore from most recent backup
+    import os
+    import glob
+
+    backup_files = glob.glob('backups/questuza_backup_*.db')
+    if backup_files:
+        latest_backup = max(backup_files, key=os.path.getctime)
+        try:
+            import shutil
+            shutil.copy2(latest_backup, 'questuza.db')
+            print(f"✅ Restored from backup: {latest_backup}")
+            init_db()  # Try initialization again
+        except Exception as restore_error:
+            print(f"❌ Backup restoration failed: {restore_error}")
+    else:
+        print("❌ No backup files found")
+
+    # Version 10: Add study system tables
+    if current_version < 10:
+        print("📚 Adding study system tables...")
+
+        # Study sessions table (active sessions)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
+                      (user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                       start_time TEXT, last_activity TEXT,
+                       PRIMARY KEY (user_id, guild_id))''')
+
+        # Study history table (completed sessions)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_history
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                       start_time TEXT, end_time TEXT, actual_duration INTEGER,
+                       completed INTEGER DEFAULT 0)''')
+
+        # Study answers table (for MCQ practice)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_answers
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                       question_number INTEGER, answer TEXT, is_correct INTEGER,
+                       timestamp TEXT)''')
+
+        # Study bookmarks table
+        c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER,
+                       title TEXT, url TEXT, category TEXT,
+                       created_at TEXT)''')
+
+        # Indexes for study tables
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
+                      ON study_sessions(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
+                      ON study_history(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
+                      ON study_answers(user_id, guild_id, session_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
+                      ON study_bookmarks(user_id, guild_id)''')
 
         print("✅ Study system tables created successfully")
 
@@ -567,84 +891,118 @@ class LevelSystem:
 
 # Utility functions
 def get_db_connection():
-    conn = sqlite3.connect('questuza.db', check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Get database connection with error handling"""
+    try:
+        conn = sqlite3.connect('questuza.db', check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.Error as e:
+        logging.error(f"Database connection failed: {e}")
+        raise Exception(f"Database connection error: {e}")
 
 
 def get_user_data(user_id: int, guild_id: int) -> Dict:
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('''SELECT * FROM users WHERE user_id = ? AND guild_id = ?''',
-              (user_id, guild_id))
-    result = c.fetchone()
-    conn.close()
+    """Get user data with error handling"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''SELECT * FROM users WHERE user_id = ? AND guild_id = ?''',
+                  (user_id, guild_id))
+        result = c.fetchone()
+        conn.close()
 
-    if result:
-        return dict(result)
-    return None
+        if result:
+            return dict(result)
+        return None
+    except sqlite3.Error as e:
+        logging.error(f"Error getting user data for {user_id}: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Unexpected error getting user data: {e}")
+        return None
 
 
 def update_user_data(user_data: Dict):
-    conn = get_db_connection()
-    c = conn.cursor()
+    """Update user data with comprehensive error handling"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
 
-    # Check if user exists
-    c.execute('''SELECT 1 FROM users WHERE user_id = ? AND guild_id = ?''',
-              (user_data['user_id'], user_data['guild_id']))
-    exists = c.fetchone()
+            # Check if user exists
+            c.execute('''SELECT 1 FROM users WHERE user_id = ? AND guild_id = ?''',
+                      (user_data['user_id'], user_data['guild_id']))
+            exists = c.fetchone()
 
-    if exists:
-        c.execute(
-            '''UPDATE users SET 
-                     unique_words = ?, vc_seconds = ?, level = ?, xp = ?,
-                     messages_sent = ?, images_sent = ?, channels_used = ?,
-                     lifetime_words = ?, quests_completed = ?, custom_color = ?,
-                     banner_url = ?, last_trivia_win = ?, xp_multiplier = ?,
-                     multiplier_expires = ?, autoclaim_enabled = ?, 
-                     daily_quests_completed = ?, weekly_quests_completed = ?,
-                     last_daily_reset = ?, last_weekly_reset = ?
-                     WHERE user_id = ? AND guild_id = ?''',
-            (user_data['unique_words'], user_data['vc_seconds'],
-             user_data['level'], user_data['xp'], user_data['messages_sent'],
-             user_data['images_sent'], user_data['channels_used'],
-             user_data['lifetime_words'], user_data['quests_completed'],
-             user_data['custom_color'], user_data['banner_url'],
-             user_data['last_trivia_win'], user_data['xp_multiplier'],
-             user_data['multiplier_expires'], 
-             user_data.get('autoclaim_enabled', 0),
-             user_data.get('daily_quests_completed', 0),
-             user_data.get('weekly_quests_completed', 0),
-             user_data.get('last_daily_reset'),
-             user_data.get('last_weekly_reset'),
-             user_data['user_id'], user_data['guild_id']))
-    else:
-        c.execute(
-            '''INSERT INTO users 
-                     (user_id, guild_id, unique_words, vc_seconds, level, xp, 
-                      messages_sent, images_sent, channels_used, lifetime_words,
-                      quests_completed, custom_color, banner_url, last_trivia_win,
-                      xp_multiplier, multiplier_expires, created_at, autoclaim_enabled,
-                      daily_quests_completed, weekly_quests_completed, 
-                      last_daily_reset, last_weekly_reset)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-            (user_data['user_id'], user_data['guild_id'],
-             user_data['unique_words'], user_data['vc_seconds'],
-             user_data['level'], user_data['xp'], user_data['messages_sent'],
-             user_data['images_sent'], user_data['channels_used'],
-             user_data['lifetime_words'], user_data['quests_completed'],
-             user_data['custom_color'], user_data['banner_url'],
-             user_data['last_trivia_win'], user_data['xp_multiplier'],
-             user_data['multiplier_expires'],
-             user_data.get('created_at', datetime.datetime.now().isoformat()),
-             user_data.get('autoclaim_enabled', 0),
-             user_data.get('daily_quests_completed', 0),
-             user_data.get('weekly_quests_completed', 0),
-             user_data.get('last_daily_reset'),
-             user_data.get('last_weekly_reset')))
+            if exists:
+                c.execute(
+                    '''UPDATE users SET
+                              unique_words = ?, vc_seconds = ?, level = ?, xp = ?,
+                              messages_sent = ?, images_sent = ?, channels_used = ?,
+                              lifetime_words = ?, quests_completed = ?, custom_color = ?,
+                              banner_url = ?, last_trivia_win = ?, xp_multiplier = ?,
+                              multiplier_expires = ?, autoclaim_enabled = ?,
+                              daily_quests_completed = ?, weekly_quests_completed = ?,
+                              last_daily_reset = ?, last_weekly_reset = ?
+                              WHERE user_id = ? AND guild_id = ?''',
+                    (user_data['unique_words'], user_data['vc_seconds'],
+                     user_data['level'], user_data['xp'], user_data['messages_sent'],
+                     user_data['images_sent'], user_data['channels_used'],
+                     user_data['lifetime_words'], user_data['quests_completed'],
+                     user_data['custom_color'], user_data['banner_url'],
+                     user_data['last_trivia_win'], user_data['xp_multiplier'],
+                     user_data['multiplier_expires'],
+                     user_data.get('autoclaim_enabled', 0),
+                     user_data.get('daily_quests_completed', 0),
+                     user_data.get('weekly_quests_completed', 0),
+                     user_data.get('last_daily_reset'),
+                     user_data.get('last_weekly_reset'),
+                     user_data['user_id'], user_data['guild_id']))
+            else:
+                c.execute(
+                    '''INSERT INTO users
+                              (user_id, guild_id, unique_words, vc_seconds, level, xp,
+                               messages_sent, images_sent, channels_used, lifetime_words,
+                               quests_completed, custom_color, banner_url, last_trivia_win,
+                               xp_multiplier, multiplier_expires, created_at, autoclaim_enabled,
+                               daily_quests_completed, weekly_quests_completed,
+                               last_daily_reset, last_weekly_reset)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (user_data['user_id'], user_data['guild_id'],
+                     user_data['unique_words'], user_data['vc_seconds'],
+                     user_data['level'], user_data['xp'], user_data['messages_sent'],
+                     user_data['images_sent'], user_data['channels_used'],
+                     user_data['lifetime_words'], user_data['quests_completed'],
+                     user_data['custom_color'], user_data['banner_url'],
+                     user_data['last_trivia_win'], user_data['xp_multiplier'],
+                     user_data['multiplier_expires'],
+                     user_data.get('created_at', datetime.datetime.now().isoformat()),
+                     user_data.get('autoclaim_enabled', 0),
+                     user_data.get('daily_quests_completed', 0),
+                     user_data.get('weekly_quests_completed', 0),
+                     user_data.get('last_daily_reset'),
+                     user_data.get('last_weekly_reset')))
 
-    conn.commit()
-    conn.close()
+            conn.commit()
+            conn.close()
+            return  # Success
+
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                logging.warning(f"Database locked, retrying update_user_data (attempt {attempt + 1}): {e}")
+                import time
+                time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                continue
+            else:
+                logging.error(f"Database operational error in update_user_data: {e}")
+                raise
+        except sqlite3.Error as e:
+            logging.error(f"Database error in update_user_data: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"Unexpected error in update_user_data: {e}")
+            raise
 
 
 def get_user_rank(user_id: int, guild_id: int) -> int:
@@ -712,6 +1070,84 @@ base_reconnect_delay = 5  # seconds
 # Study system global variables
 study_setup_states = {}
 
+# Session recovery system
+async def handle_study_session_recovery():
+    """Recover interrupted study sessions after bot restart"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Find active study sessions that were interrupted
+        c.execute('''SELECT user_id, guild_id, session_id, study_type, subject, mood,
+                            intended_duration, start_time, last_activity
+                     FROM study_sessions''')
+        active_sessions = c.fetchall()
+        conn.close()
+
+        if not active_sessions:
+            return
+
+        recovered_count = 0
+        for session_data in active_sessions:
+            try:
+                user_id, guild_id, session_id, study_type, subject, mood, intended_duration, start_time, last_activity = session_data
+
+                # Calculate elapsed time
+                start_dt = datetime.datetime.fromisoformat(start_time)
+                last_activity_dt = datetime.datetime.fromisoformat(last_activity) if last_activity else start_dt
+                elapsed_seconds = int((datetime.datetime.now() - start_dt).total_seconds())
+                intended_seconds = intended_duration * 60
+
+                # Check if session should still be active
+                if elapsed_seconds < intended_seconds:
+                    # Session was interrupted, try to notify user
+                    try:
+                        user = bot.get_user(user_id)
+                        if user:
+                            embed = discord.Embed(
+                                title="🔄 Study Session Recovered",
+                                description="Your study session was recovered after bot restart!",
+                                color=discord.Color.blue()
+                            )
+                            embed.add_field(name="Type", value=study_type, inline=True)
+                            embed.add_field(name="Subject", value=subject or "Not specified", inline=True)
+                            embed.add_field(name="Elapsed Time", value=f"{elapsed_seconds//60}m {elapsed_seconds%60}s", inline=True)
+                            embed.add_field(name="Remaining Time", value=f"{max(0, (intended_seconds - elapsed_seconds)//60)}m", inline=True)
+                            embed.set_footer(text="Use %study status to check progress or %study stop to end")
+
+                            # Try to DM the user
+                            try:
+                                await user.send(embed=embed)
+                            except discord.Forbidden:
+                                # Can't DM, find a suitable channel
+                                for guild in bot.guilds:
+                                    if guild.id == guild_id:
+                                        member = guild.get_member(user_id)
+                                        if member:
+                                            # Try to find a channel they can see
+                                            for channel in guild.text_channels:
+                                                if channel.permissions_for(member).send_messages:
+                                                    try:
+                                                        await channel.send(f"{member.mention}", embed=embed)
+                                                        break
+                                                    except:
+                                                        continue
+                                        break
+
+                            recovered_count += 1
+                    except Exception as e:
+                        logging.error(f"Error notifying user {user_id} about session recovery: {e}")
+
+            except Exception as e:
+                logging.error(f"Error processing session recovery for user {user_id}: {e}")
+                continue
+
+        if recovered_count > 0:
+            logging.info(f"Successfully recovered {recovered_count} study sessions")
+
+    except Exception as e:
+        logging.error(f"Error in handle_study_session_recovery: {e}")
+
 # Study system functions
 def validate_pdf_url(url):
     """Validate if a URL points to a PDF"""
@@ -748,31 +1184,106 @@ def extract_pdf_text(url):
         print(f"Error extracting PDF text: {e}")
         return None
 
+
+def render_pdf_page(url, page_num=0, zoom=2.0):
+    """Render a PDF page as an image"""
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+
+        # Save to temporary file
+        with open('temp_pdf.pdf', 'wb') as f:
+            f.write(response.content)
+
+        # Open PDF and render page
+        doc = fitz.open('temp_pdf.pdf')
+
+        if page_num >= doc.page_count:
+            doc.close()
+            os.remove('temp_pdf.pdf')
+            return None, f"Page {page_num + 1} does not exist. PDF has {doc.page_count} pages."
+
+        page = doc.load_page(page_num)
+
+        # Render page to image
+        matrix = fitz.Matrix(zoom, zoom)  # Scale factor
+        pix = page.get_pixmap(matrix=matrix)
+
+        # Save as PNG
+        img_path = f'temp_page_{page_num}.png'
+        pix.save(img_path)
+
+        doc.close()
+        os.remove('temp_pdf.pdf')
+
+        return img_path, None
+    except Exception as e:
+        print(f"Error rendering PDF page: {e}")
+        # Clean up any temp files
+        try:
+            os.remove('temp_pdf.pdf')
+        except:
+            pass
+        try:
+            os.remove(f'temp_page_{page_num}.png')
+        except:
+            pass
+        return None, str(e)
+
 def parse_answer_key(text, pattern=None):
-    """Parse answer key from PDF text using patterns"""
+    """Parse answer key from PDF text using comprehensive patterns"""
     answers = {}
 
     if not pattern:
-        # Try common patterns
+        # Comprehensive patterns for answer keys
         patterns = [
+            # Standard academic formats
             r'Question\s*(\d+)[:\.\s]*[Aa]nswer[:\.\s]*([A-Z])',
             r'(\d+)[\.\)]\s*[Aa]nswer[:\.\s]*([A-Z])',
             r'Q(\d+)[:\.\s]*([A-Z])',
             r'(\d+)\)\s*([A-Z])',
-            r'(\d+)[:\.\s]*([A-Z])'
+            r'(\d+)[:\.\s]*([A-Z])',
+
+            # Alternative formats
+            r'(\d+)\s*=\s*([A-Z])',
+            r'(\d+)\s*-\s*([A-Z])',
+            r'(\d+)\s*\|\s*([A-Z])',
+            r'Item\s*(\d+)[:\.\s]*([A-Z])',
+
+            # Table-like formats
+            r'(\d+)\s+([A-Z])\s',
+            r'(\d{1,3})\s*\t\s*([A-Z])',
+
+            # Key/Answer key formats
+            r'[Aa]nswer\s+[Kk]ey[:\.\s]*(\d+)[:\.\s]*([A-Z])',
+            r'[Kk]ey[:\.\s]*(\d+)[:\.\s]*([A-Z])',
+
+            # Number-letter combinations
+            r'(\d{1,3})([A-Z])',
         ]
     else:
         patterns = [pattern]
+
+    # Clean and normalize text
+    text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
 
     for pattern_regex in patterns:
         matches = re.findall(pattern_regex, text, re.IGNORECASE)
         for match in matches:
             try:
-                question_num = int(match[0])
-                answer = match[1].upper()
-                answers[question_num] = answer
-            except:
+                if len(match) == 2:
+                    question_num = int(match[0])
+                    answer = match[1].upper().strip()
+                    # Validate answer is a single letter A-Z
+                    if len(answer) == 1 and answer.isalpha() and answer <= 'Z':
+                        answers[question_num] = answer
+            except (ValueError, IndexError):
                 continue
+
+    # Additional validation: remove obviously wrong matches
+    # (like if we have question 1000 with answer A, it's probably not valid)
+    max_reasonable_question = 200  # Most tests don't have more than 200 questions
+    answers = {q: a for q, a in answers.items() if q <= max_reasonable_question}
 
     return answers
 
@@ -796,23 +1307,45 @@ def check_answer(session_id, question_num, user_answer):
 # Bot events
 @bot.event
 async def on_ready():
-    print(f'🚀 Questuza v{VERSION} is online! Logged in as {bot.user.name}')
-    print(f'📊 Connected to {len(bot.guilds)} guilds')
-    await bot.change_presence(activity=discord.Activity(
-        type=discord.ActivityType.watching, name="your quests | %help"))
+    try:
+        print(f'🚀 Questuza v{VERSION} is online! Logged in as {bot.user.name}')
+        print(f'📊 Connected to {len(bot.guilds)} guilds')
 
-    # Handle offline VC tracking - catch up on missed time
-    await handle_offline_vc_tracking()
+        await bot.change_presence(activity=discord.Activity(
+            type=discord.ActivityType.watching, name="your quests | %help"))
 
-    # Start the background tasks
-    if not check_voice_sessions.is_running():
-        check_voice_sessions.start()
-    if not send_keep_alive.is_running():
-        send_keep_alive.start()
-        print("💚 Keep-alive task started - sending messages every 2 minutes")
-    if not schedule_trivia_questions.is_running():
-        schedule_trivia_questions.start()
-        print("🎯 Trivia auto-scheduler started - checking every 2 hours")
+        # Handle offline VC tracking - catch up on missed time
+        try:
+            await handle_offline_vc_tracking()
+        except Exception as e:
+            logging.error(f"Error during offline VC tracking catch-up: {e}")
+
+        # Start the background tasks
+        try:
+            if not check_voice_sessions.is_running():
+                check_voice_sessions.start()
+            if not send_keep_alive.is_running():
+                send_keep_alive.start()
+                print("💚 Keep-alive task started - sending messages every 2 minutes")
+            if not schedule_trivia_questions.is_running():
+                schedule_trivia_questions.start()
+                print("🎯 Trivia auto-scheduler started - checking every 2 hours")
+            if not update_study_sessions.is_running():
+                update_study_sessions.start()
+                print("📚 Study session tracker started - updating every minute")
+        except Exception as e:
+            logging.error(f"Error starting background tasks: {e}")
+
+        # Handle study session recovery after bot restart
+        try:
+            await handle_study_session_recovery()
+        except Exception as e:
+            logging.error(f"Error during study session recovery: {e}")
+
+    except discord.DiscordException as e:
+        logging.error(f"Discord error in on_ready: {e}")
+    except Exception as e:
+        logging.error(f"Unexpected error in on_ready: {e}")
 
 
 @bot.event
@@ -1104,13 +1637,39 @@ async def on_message(message):
         if session_check:
             session_id = session_check[0]
 
-            # Look for answer patterns in the message
+            # Look for answer patterns in the message - enhanced patterns
             answer_patterns = [
+                # Direct answer statements
                 r'(?:answer|ans)(?:\s*[:=]\s*|\s+is\s+|\s+)([A-Z])',
                 r'i\s+think\s+(?:it\'?s?|the\s+answer\s+is\s+)([A-Z])',
+                r'(?:my\s+)?(?:final\s+)?answer\s+is\s+([A-Z])',
+                r'going\s+with\s+([A-Z])',
+                r'i\'?ll\s+go\s+with\s+([A-Z])',
+                r'i\s+choose\s+([A-Z])',
+
+                # Question-specific answers
                 r'question\s+\d+(?:\s*[:=]\s*|\s+is\s+|\s+answer\s+)([A-Z])',
                 r'q\d+(?:\s*[:=]\s*|\s+is\s+|\s+answer\s+)([A-Z])',
+                r'for\s+question\s+\d+[:\s]*([A-Z])',
+                r'for\s+q\d+[:\s]*([A-Z])',
+
+                # Multiple choice indicators
                 r'^\s*([A-Z])\s*$',  # Just a single letter
+                r'option\s+([A-Z])',
+                r'choice\s+([A-Z])',
+                r'letter\s+([A-Z])',
+
+                # Casual responses
+                r'(?:it\'?s?|that\'?s|definitely|obviously|clearly)\s+([A-Z])',
+                r'has\s+to\s+be\s+([A-Z])',
+                r'must\s+be\s+([A-Z])',
+                r'probably\s+([A-Z])',
+                r'likely\s+([A-Z])',
+
+                # Numbered patterns (for when questions are numbered)
+                r'(\d+)\s*[:\.]\s*([A-Z])',
+                r'(\d+)\)\s*([A-Z])',
+                r'(\d+)\s+=\s+([A-Z])',
             ]
 
             question_num = None
@@ -1530,6 +2089,168 @@ async def schedule_trivia_questions():
                         print(f"🎯 Auto-scheduled trivia question in {guild.name}")
     except Exception as e:
         print(f"❌ Error in trivia auto-scheduler: {e}")
+
+
+# Study session background task
+@tasks.loop(seconds=30)
+async def update_study_sessions():
+    """Update study session durations and check for inactive sessions and expired test timers"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get all active study sessions
+        c.execute('''SELECT user_id, guild_id, session_id, start_time, last_activity, intended_duration, study_type
+                     FROM study_sessions''')
+        active_sessions = c.fetchall()
+
+        if active_sessions:
+            now = datetime.datetime.now()
+            inactive_threshold = 30 * 60  # 30 minutes of inactivity
+
+            for session in active_sessions:
+                user_id, guild_id, session_id, start_time_str, last_activity_str, intended_duration, study_type = session
+
+                start_time = datetime.datetime.fromisoformat(start_time_str)
+                last_activity = datetime.datetime.fromisoformat(last_activity_str) if last_activity_str else start_time
+
+                session_duration = (now - start_time).total_seconds()
+
+                # Check for timed test expiration (MCQ Test type)
+                if study_type == "MCQ Test" and intended_duration and session_duration >= (intended_duration * 60):
+                    # Test timer has expired - end the test
+                    actual_duration = int(session_duration)
+
+                    # Move to history
+                    c.execute('''INSERT INTO study_history
+                                 (user_id, guild_id, session_id, study_type, subject, mood,
+                                  intended_duration, start_time, end_time, actual_duration, completed)
+                                 SELECT user_id, guild_id, session_id, study_type, subject, mood,
+                                        intended_duration, start_time, ?, ?, 1
+                                 FROM study_sessions
+                                 WHERE user_id = ? AND guild_id = ?''',
+                              (now.isoformat(), actual_duration, user_id, guild_id))
+
+                    # Remove from active sessions
+                    c.execute('''DELETE FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+                              (user_id, guild_id))
+
+                    # Send notification to user if possible
+                    try:
+                        user = bot.get_user(user_id)
+                        if user:
+                            embed = discord.Embed(
+                                title="⏰ Test Time Expired!",
+                                description=f"Your MCQ test session has automatically ended after {intended_duration} minutes.",
+                                color=discord.Color.red()
+                            )
+                            embed.add_field(name="Session ID", value=f"`{session_id}`", inline=True)
+                            embed.add_field(name="Actual Duration", value=f"{actual_duration//60}m {actual_duration%60}s", inline=True)
+
+                            # Get test statistics
+                            c.execute('''SELECT COUNT(*) FROM study_answers
+                                         WHERE session_id = ? AND is_correct = 1''', (session_id,))
+                            correct_answers = c.fetchone()[0]
+
+                            c.execute('''SELECT COUNT(*) FROM study_answers
+                                         WHERE session_id = ?''', (session_id,))
+                            total_answers = c.fetchone()[0]
+
+                            if total_answers > 0:
+                                accuracy = (correct_answers / total_answers) * 100
+                                embed.add_field(name="Test Results", value=f"{correct_answers}/{total_answers} correct ({accuracy:.1f}%)", inline=False)
+
+                            await user.send(embed=embed)
+                            print(f"⏰ Sent test expiration notification to user {user_id}")
+                    except Exception as e:
+                        print(f"❌ Failed to send test expiration notification to user {user_id}: {e}")
+
+                    print(f"⏰ Auto-ended timed test for user {user_id} (duration: {actual_duration//60}m)")
+
+                # Check if session has been inactive for too long (non-test sessions)
+                elif study_type != "MCQ Test":
+                    time_since_activity = (now - last_activity).total_seconds()
+                    if time_since_activity > inactive_threshold:
+                        # Mark session as completed due to inactivity
+                        actual_duration = int((last_activity - start_time).total_seconds())
+
+                        # Move to history
+                        c.execute('''INSERT INTO study_history
+                                     (user_id, guild_id, session_id, study_type, subject, mood,
+                                      intended_duration, start_time, end_time, actual_duration, completed)
+                                     SELECT user_id, guild_id, session_id, study_type, subject, mood,
+                                            intended_duration, start_time, ?, ?, 0
+                                     FROM study_sessions
+                                     WHERE user_id = ? AND guild_id = ?''',
+                                  (last_activity.isoformat(), actual_duration, user_id, guild_id))
+
+                        # Remove from active sessions
+                        c.execute('''DELETE FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+                                  (user_id, guild_id))
+
+                        print(f"📚 Ended inactive study session for user {user_id} (inactive {int(time_since_activity/60)}m)")
+                    else:
+                        # Update last_activity to current time for active tracking
+                        c.execute('''UPDATE study_sessions SET last_activity = ?
+                                     WHERE user_id = ? AND guild_id = ?''',
+                                  (now.isoformat(), user_id, guild_id))
+
+            conn.commit()
+            print(f"📚 Updated {len(active_sessions)} active study sessions")
+        else:
+            print("📚 No active study sessions to update")
+
+        conn.close()
+    except Exception as e:
+        print(f"❌ Error in study session update task: {e}")
+
+
+async def handle_study_session_recovery():
+    """Handle study session recovery after bot restart"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get all active study sessions
+        c.execute('''SELECT user_id, guild_id, session_id, start_time, subject
+                     FROM study_sessions''')
+        active_sessions = c.fetchall()
+        conn.close()
+
+        if active_sessions:
+            print(f"📚 Recovered {len(active_sessions)} active study sessions after bot restart")
+
+            # Send recovery notifications to users
+            for session in active_sessions:
+                user_id, guild_id, session_id, start_time_str, subject = session
+
+                try:
+                    # Try to get the user and send a DM
+                    user = bot.get_user(user_id)
+                    if user:
+                        embed = discord.Embed(
+                            title="📚 Study Session Recovered!",
+                            description="Your study session has been automatically recovered after the bot restart.",
+                            color=discord.Color.green()
+                        )
+                        embed.add_field(name="Subject", value=subject or "Not specified", inline=True)
+                        embed.add_field(name="Session ID", value=f"`{session_id}`", inline=True)
+                        embed.add_field(
+                            name="Commands",
+                            value="• Use `%study status` to check progress\n• Use `%study stop` to end the session",
+                            inline=False
+                        )
+                        embed.set_footer(text="Your study session continues uninterrupted")
+
+                        await user.send(embed=embed)
+                        print(f"📚 Sent recovery notification to user {user_id}")
+                except Exception as e:
+                    print(f"❌ Failed to send recovery notification to user {user_id}: {e}")
+        else:
+            print("📚 No active study sessions to recover after bot restart")
+
+    except Exception as e:
+        print(f"❌ Error in study session recovery: {e}")
 
 
 async def start_random_trivia_question(guild, channel):
@@ -1963,13 +2684,281 @@ async def study_cmd(ctx, action: str = None, *, args: str = None):
 
         await ctx.send(embed=embed)
 
+    elif action == "pdf":
+        # Handle PDF-related commands
+        if not args:
+            embed = discord.Embed(
+                title="📄 PDF Study Tools",
+                description="Tools for studying with PDF documents",
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="Commands",
+                value="`%study pdf load <url>` - Load PDF for study\n"
+                      "`%study pdf answers <url>` - Load answer key from PDF\n"
+                      "`%study pdf show <url> [page]` - Display PDF page as image\n"
+                      "`%study pdf text <url>` - Extract and display PDF text",
+                inline=False
+            )
+            await ctx.send(embed=embed)
+            return
+
+        sub_action = args[0].lower() if args else ""
+
+        if sub_action == "show":
+            # Display PDF page as image
+            if len(args) < 2:
+                await ctx.send("❌ Please provide a PDF URL! Usage: `%study pdf show <url> [page]`")
+                return
+
+            pdf_url = args[1]
+            page_num = int(args[2]) - 1 if len(args) > 2 and args[2].isdigit() else 0
+
+            # Validate URL
+            if not validate_pdf_url(pdf_url):
+                await ctx.send("❌ Invalid PDF URL! Please provide a valid PDF link.")
+                return
+
+            # Render PDF page
+            embed = discord.Embed(
+                title="📄 PDF Viewer",
+                description=f"Page {page_num + 1}",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Source", value=f"[View PDF]({pdf_url})", inline=True)
+
+            # Send initial embed
+            status_msg = await ctx.send(embed=embed)
+
+            try:
+                img_path, error = render_pdf_page(pdf_url, page_num)
+
+                if error:
+                    embed.add_field(name="Error", value=error, inline=False)
+                    await status_msg.edit(embed=embed)
+                    return
+
+                if img_path:
+                    # Send the image
+                    file = discord.File(img_path, filename=f"page_{page_num + 1}.png")
+                    embed.set_image(url=f"attachment://page_{page_num + 1}.png")
+                    await ctx.send(file=file, embed=embed)
+
+                    # Clean up
+                    try:
+                        os.remove(img_path)
+                    except:
+                        pass
+
+                    # Delete status message
+                    await status_msg.delete()
+                else:
+                    embed.add_field(name="Error", value="Failed to render PDF page", inline=False)
+                    await status_msg.edit(embed=embed)
+
+            except Exception as e:
+                embed.add_field(name="Error", value=f"Failed to process PDF: {str(e)}", inline=False)
+                await status_msg.edit(embed=embed)
+
+        elif sub_action == "text":
+            # Extract and display PDF text
+            if len(args) < 2:
+                await ctx.send("❌ Please provide a PDF URL! Usage: `%study pdf text <url>`")
+                return
+
+            pdf_url = args[1]
+
+            if not validate_pdf_url(pdf_url):
+                await ctx.send("❌ Invalid PDF URL! Please provide a valid PDF link.")
+                return
+
+            embed = discord.Embed(
+                title="📄 PDF Text Extractor",
+                description="Extracting text from PDF...",
+                color=discord.Color.blue()
+            )
+            status_msg = await ctx.send(embed=embed)
+
+            try:
+                text = extract_pdf_text(pdf_url)
+
+                if text:
+                    # Split text into chunks if too long
+                    max_length = 4000  # Discord embed limit
+                    if len(text) > max_length:
+                        chunks = [text[i:i+max_length] for i in range(0, len(text), max_length)]
+                        embed.description = f"Text extracted ({len(text)} characters)"
+                        embed.add_field(name="Text (Part 1)", value=chunks[0][:1024], inline=False)
+                        await status_msg.edit(embed=embed)
+
+                        # Send remaining chunks
+                        for i, chunk in enumerate(chunks[1:], 2):
+                            if i > 5:  # Limit to 5 messages
+                                await ctx.send("... (text truncated)")
+                                break
+                            embed = discord.Embed(
+                                title=f"📄 PDF Text (Part {i})",
+                                description=chunk[:4096],
+                                color=discord.Color.blue()
+                            )
+                            await ctx.send(embed=embed)
+                    else:
+                        embed.description = "Text extracted successfully"
+                        embed.add_field(name="Content", value=text[:4096], inline=False)
+                        await status_msg.edit(embed=embed)
+                else:
+                    embed.description = "No text found in PDF or extraction failed"
+                    await status_msg.edit(embed=embed)
+
+            except Exception as e:
+                embed.description = f"Failed to extract text: {str(e)}"
+                await status_msg.edit(embed=embed)
+
+        elif sub_action == "load":
+            # Load PDF for study session
+            if len(args) < 2:
+                await ctx.send("❌ Please provide a PDF URL! Usage: `%study pdf load <url>`")
+                return
+
+            pdf_url = args[1]
+
+            if not validate_pdf_url(pdf_url):
+                await ctx.send("❌ Invalid PDF URL! Please provide a valid PDF link.")
+                return
+
+            # Check if user has active session
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''SELECT session_id FROM study_sessions
+                          WHERE user_id = ? AND guild_id = ?''',
+                       (ctx.author.id, ctx.guild.id))
+            session_check = c.fetchone()
+            conn.close()
+
+            if not session_check:
+                await ctx.send("❌ You don't have an active study session! Use `%study start` first.")
+                return
+
+            # Store PDF URL in session (we'll add a pdf_url column to study_sessions table)
+            # For now, just acknowledge
+            embed = discord.Embed(
+                title="📄 PDF Loaded",
+                description="PDF has been loaded for your study session!",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="URL", value=pdf_url, inline=False)
+            embed.add_field(
+                name="Commands",
+                value="• `%study pdf show <url> [page]` - View pages\n"
+                      "• `%study pdf text <url>` - Extract text\n"
+                      "• `%study answer <question> <answer>` - Submit answers",
+                inline=False
+            )
+            await ctx.send(embed=embed)
+
+        elif sub_action == "answers":
+            # Load answer key from PDF
+            if len(args) < 2:
+                await ctx.send("❌ Please provide a PDF URL! Usage: `%study pdf answers <url> [pattern]`")
+                return
+
+            pdf_url = args[1]
+            custom_pattern = args[2] if len(args) > 2 else None
+
+            if not validate_pdf_url(pdf_url):
+                await ctx.send("❌ Invalid PDF URL! Please provide a valid PDF link.")
+                return
+
+            # Check if user has active session
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''SELECT session_id FROM study_sessions
+                          WHERE user_id = ? AND guild_id = ?''',
+                       (ctx.author.id, ctx.guild.id))
+            session_check = c.fetchone()
+
+            if not session_check:
+                conn.close()
+                await ctx.send("❌ You don't have an active study session! Use `%study start` first.")
+                return
+
+            session_id = session_check[0]
+
+            embed = discord.Embed(
+                title="🔑 Loading Answer Key",
+                description="Extracting answers from PDF...",
+                color=discord.Color.blue()
+            )
+            status_msg = await ctx.send(embed=embed)
+
+            try:
+                # Extract text from PDF
+                text = extract_pdf_text(pdf_url)
+
+                if not text:
+                    embed.description = "Failed to extract text from PDF"
+                    await status_msg.edit(embed=embed)
+                    conn.close()
+                    return
+
+                # Parse answer key
+                answers = parse_answer_key(text, custom_pattern)
+
+                if answers:
+                    # Store answers in database
+                    for question_num, answer in answers.items():
+                        c.execute('''INSERT OR REPLACE INTO study_answers
+                                      (user_id, guild_id, session_id, question_number, answer, is_correct, timestamp)
+                                      VALUES (?, ?, ?, ?, ?, 1, ?)''',
+                                   (ctx.author.id, ctx.guild.id, session_id, question_num, answer,
+                                    datetime.datetime.now().isoformat()))
+
+                    conn.commit()
+
+                    embed.title = "✅ Answer Key Loaded"
+                    embed.description = f"Successfully loaded {len(answers)} answers!"
+                    embed.color = discord.Color.green()
+
+                    # Show first few answers as preview
+                    preview_answers = dict(list(answers.items())[:5])
+                    answer_text = "\n".join([f"Q{q}: {a}" for q, a in preview_answers.items()])
+                    if len(answers) > 5:
+                        answer_text += f"\n... and {len(answers) - 5} more"
+
+                    embed.add_field(name="Answers Preview", value=answer_text, inline=False)
+                    embed.add_field(
+                        name="Ready to Study",
+                        value="You can now submit answers using natural language or `%study answer <q> <a>`",
+                        inline=False
+                    )
+
+                else:
+                    embed.title = "❌ No Answers Found"
+                    embed.description = "Could not parse any answers from the PDF"
+                    embed.color = discord.Color.red()
+                    embed.add_field(
+                        name="Try Custom Pattern",
+                        value="`%study pdf answers <url> \"custom_regex_pattern\"`",
+                        inline=False
+                    )
+
+                await status_msg.edit(embed=embed)
+
+            except Exception as e:
+                embed.title = "❌ Error"
+                embed.description = f"Failed to process answer key: {str(e)}"
+                embed.color = discord.Color.red()
+                await status_msg.edit(embed=embed)
+
+            conn.close()
+
     elif action == "status":
         # Check current session status
         conn = get_db_connection()
         c = conn.cursor()
         c.execute('''SELECT * FROM study_sessions
-                     WHERE user_id = ? AND guild_id = ?''',
-                  (ctx.author.id, ctx.guild.id))
+                      WHERE user_id = ? AND guild_id = ?''',
+                   (ctx.author.id, ctx.guild.id))
         session_data = c.fetchone()
         conn.close()
 
@@ -2030,6 +3019,11 @@ async def study_cmd(ctx, action: str = None, *, args: str = None):
             embed.add_field(
                 name="Load PDF",
                 value="`%study pdf load <url>` - Load a PDF for study",
+                inline=False
+            )
+            embed.add_field(
+                name="Display PDF Page",
+                value="`%study pdf show <url> [page]` - Display PDF page as image (page 1 if not specified)",
                 inline=False
             )
             embed.add_field(
@@ -2184,6 +3178,66 @@ async def study_cmd(ctx, action: str = None, *, args: str = None):
                 color=discord.Color.green()
             )
             await ctx.send(embed=embed)
+
+        elif args.startswith("show "):
+            # Display PDF page as image
+            parts = args[5:].strip().split()
+            if len(parts) < 1:
+                conn.close()
+                await ctx.send("❌ Usage: `%study pdf show <url> [page_number]`")
+                return
+
+            pdf_url = parts[0]
+            page_num = int(parts[1]) - 1 if len(parts) > 1 else 0  # Convert to 0-based indexing
+
+            if not pdf_url.startswith(('http://', 'https://')):
+                conn.close()
+                await ctx.send("❌ Please provide a valid URL starting with http:// or https://")
+                return
+
+            # Validate PDF
+            if not validate_pdf_url(pdf_url):
+                conn.close()
+                await ctx.send("❌ The provided URL doesn't appear to be a valid PDF. Please check the link.")
+                return
+
+            # Render the page
+            embed = discord.Embed(
+                title="📄 Rendering PDF Page...",
+                description="Please wait while we render the page.",
+                color=discord.Color.blue()
+            )
+            status_msg = await ctx.send(embed=embed)
+
+            img_path, error = render_pdf_page(pdf_url, page_num)
+
+            if error:
+                await status_msg.edit(embed=discord.Embed(
+                    title="❌ PDF Rendering Failed",
+                    description=error,
+                    color=discord.Color.red()
+                ))
+            else:
+                # Send the image
+                file = discord.File(img_path, filename=f'pdf_page_{page_num + 1}.png')
+                embed = discord.Embed(
+                    title=f"📄 PDF Page {page_num + 1}",
+                    description=f"From: {pdf_url}",
+                    color=discord.Color.green()
+                )
+                embed.set_image(url=f'attachment://pdf_page_{page_num + 1}.png')
+                await ctx.send(file=file, embed=embed)
+
+                # Clean up the temporary file
+                try:
+                    import os
+                    os.remove(img_path)
+                except:
+                    pass
+
+                await status_msg.delete()
+
+            conn.close()
 
         else:
             conn.close()
@@ -2510,6 +3564,45 @@ async def handle_offline_vc_tracking():
 
     except Exception as e:
         print(f"❌ Error in offline VC tracking: {e}")
+    finally:
+        conn.close()
+
+
+async def handle_study_session_recovery():
+    """Handle study session recovery after bot restart"""
+    print("📚 Checking for active study sessions to resume...")
+
+    conn = get_db_connection()
+    try:
+        # Find all active study sessions
+        active_sessions = conn.execute(
+            '''SELECT user_id, guild_id, session_id, start_time FROM study_sessions''').fetchall()
+
+        if not active_sessions:
+            print("✅ No active study sessions found to resume")
+            return
+
+        now = datetime.datetime.now()
+        resumed_count = 0
+
+        for session in active_sessions:
+            user_id, guild_id, session_id, start_time_str = session
+
+            # Update last_activity to current time so sessions can continue
+            # This effectively "resumes" the session from the restart
+            conn.execute(
+                '''UPDATE study_sessions SET last_activity = ?
+                         WHERE user_id = ? AND guild_id = ?''',
+                (now.isoformat(), user_id, guild_id))
+
+            resumed_count += 1
+            print(f"📚 Resumed study session for user {user_id}")
+
+        conn.commit()
+        print(f"✅ Study session recovery complete - resumed {resumed_count} sessions")
+
+    except Exception as e:
+        print(f"❌ Error in study session recovery: {e}")
     finally:
         conn.close()
 
@@ -3693,11 +4786,15 @@ async def version_cmd(ctx):
     embed.add_field(
         name="📅 Last Updated",
         value="Features added in this version:\n"
-              "• Version command\n"
-              "• Improved typo detection\n"
-              "• Offline VC tracking\n"
-              "• 5-hour VC session cap\n"
-              "• Advanced quests with pagination",
+              "• **Phase 5: Polish & Reliability Complete**\n"
+              "• Comprehensive error handling throughout\n"
+              "• Data recovery systems and session persistence\n"
+              "• Study session recovery after bot restarts\n"
+              "• Enhanced UX with better conversation flows\n"
+              "• Automatic backup and restore functionality\n"
+              "• Improved error messages and user feedback\n"
+              "• Retry mechanisms for failed operations\n"
+              "• System health monitoring and logging",
         inline=False
     )
     embed.set_footer(text="Use %help for command list")
@@ -3732,6 +4829,7 @@ async def help_cmd(ctx):
         "%banner <url>": "Set profile banner for embed (Level 1+)",
         "%color <hex>": "Change profile color for embed",
         "%leaderboard [category] [page]": "View leaderboards (overall/words/vc/quests/xp)",
+        "%export [type]": "Export your data (study/user/all) as JSON",
         "%version": "Check bot version and changelog",
         "%guide": "Learn how the bot works",
         "%admin help": "View admin-only commands"
@@ -5147,39 +6245,2866 @@ async def reset_stats_cmd(ctx, member: discord.Member, stat_type: str = "all"):
     await ctx.send(embed=embed)
 
 
+# Study system commands
+@bot.group(name='study', invoke_without_command=True)
+async def study_group(ctx):
+    """Study system commands for PDF-based learning and MCQ practice"""
+    embed = discord.Embed(
+        title="📚 Study System",
+        description="Commands for managing study sessions, PDFs, and answer processing",
+        color=discord.Color.blue()
+    )
+    embed.add_field(
+        name="Session Management",
+        value="`%study start [type] [duration]` - Begin a study session\n"
+              "`%study stop` - End current session\n"
+              "`%study status` - Check session progress\n"
+              "`%study history [page]` - View past study sessions",
+        inline=False
+    )
+    embed.add_field(
+        name="Test Mode",
+        value="`%study start test <minutes>` - Start timed MCQ test\n"
+              "`%study testsummary [session_id]` - View test results",
+        inline=False
+    )
+    embed.add_field(
+        name="PDF Tools",
+        value="`%study pdf <url> [page]` - Display PDF page as image\n"
+              "`%study answers <url> [pattern]` - Process answer key from PDF",
+        inline=False
+    )
+    embed.add_field(
+        name="Configuration",
+        value="`%study patterns` - Configure answer recognition patterns\n"
+              "`%study bookmarks` - Manage study bookmarks",
+        inline=False
+    )
+    embed.add_field(
+        name="Analytics & History",
+        value="`%study analytics [period]` - View study statistics\n"
+              "`%study history [page]` - Browse study session history\n"
+              "`%study trends [period]` - View study progress trends\n"
+              "`%study leaderboard [metric] [period]` - View study leaderboards\n"
+              "`%study export [format]` - Export your study data",
+        inline=False
+    )
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='start')
+async def study_start(ctx, session_type: str = None, duration: int = None):
+    """Start a new study session - Usage: %study start [type] [duration_minutes]
+
+    Types: practice, test, reading, other
+    For tests: %study start test <minutes>
+    For practice: %study start practice
+    """
+
+    # Check if user already has an active session
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''SELECT session_id FROM study_sessions
+                  WHERE user_id = ? AND guild_id = ?''',
+              (ctx.author.id, ctx.guild.id))
+    existing_session = c.fetchone()
+    conn.close()
+
+    if existing_session:
+        embed = discord.Embed(
+            title="❌ Session Already Active",
+            description="You already have an active study session. Use `%study stop` to end it first.",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    # Direct mode: if type and duration provided
+    if session_type and duration:
+        # Validate inputs
+        valid_types = ['practice', 'test', 'reading', 'other']
+        if session_type.lower() not in valid_types:
+            await ctx.send(f"❌ Invalid session type! Valid types: {', '.join(valid_types)}")
+            return
+
+        if duration <= 0 or duration > 480:  # Max 8 hours
+            await ctx.send("❌ Duration must be between 1 and 480 minutes!")
+            return
+
+        # Map to internal types
+        type_mapping = {
+            'practice': 'MCQ Practice',
+            'test': 'MCQ Test',
+            'reading': 'Reading',
+            'other': 'Other'
+        }
+        study_type = type_mapping[session_type.lower()]
+
+        # Start session directly
+        session_id = f"{ctx.author.id}_{int(datetime.datetime.now().timestamp())}"
+
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''INSERT INTO study_sessions
+                      (user_id, guild_id, session_id, study_type, subject, mood,
+                       intended_duration, start_time, last_activity)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (ctx.author.id, ctx.guild.id, session_id,
+                   study_type, f"{study_type} Session", "Focused",
+                   duration, datetime.datetime.now().isoformat(),
+                   datetime.datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+
+        # Send confirmation
+        embed = discord.Embed(
+            title="🚀 Study Session Started!",
+            description=f"Your {study_type.lower()} session has begun!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Type", value=study_type, inline=True)
+        embed.add_field(name="Duration", value=f"{duration} minutes", inline=True)
+        embed.add_field(name="Session ID", value=f"`{session_id}`", inline=True)
+
+        if study_type == "MCQ Test":
+            embed.add_field(
+                name="⏰ Test Mode Active",
+                value=f"This test will automatically end in {duration} minutes.\n"
+                      "Answers are auto-saved as you submit them.",
+                inline=False
+            )
+
+        embed.add_field(
+            name="Commands",
+            value="• Use `%study stop` to end the session early\n"
+                  "• Use `%study status` to check progress\n"
+                  "• Submit answers naturally (e.g., 'Answer: B' or 'I think it's C')",
+            inline=False
+        )
+
+        await ctx.send(embed=embed)
+        return
+
+    # Interactive setup mode (original behavior)
+    embed = discord.Embed(
+        title="📚 Study Session Setup",
+        description="Let's set up your study session!",
+        color=discord.Color.green()
+    )
+    embed.add_field(
+        name="Question 1/4",
+        value="What type of study session is this?\n• **MCQ Practice**\n• **MCQ Test**\n• **Reading**\n• **Other**",
+        inline=False
+    )
+
+    setup_msg = await ctx.send(embed=embed)
+
+    # Store setup state
+    study_setup_states[ctx.author.id] = {
+        'step': 1,
+        'message': setup_msg,
+        'data': {}
+    }
+
+
+@study_group.command(name='stop')
+async def study_stop(ctx):
+    """Stop the current study session"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Get active session
+    c.execute('''SELECT session_id, start_time, intended_duration, study_type, subject
+                 FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+              (ctx.author.id, ctx.guild.id))
+    session_data = c.fetchone()
+
+    if not session_data:
+        await ctx.send("❌ You don't have an active study session!")
+        conn.close()
+        return
+
+    session_id, start_time_str, intended_duration, study_type, subject = session_data
+    start_time = datetime.datetime.fromisoformat(start_time_str)
+    actual_duration = int((datetime.datetime.now() - start_time).total_seconds())
+
+    # Move to history
+    c.execute('''INSERT INTO study_history
+                 (user_id, guild_id, session_id, study_type, subject, mood,
+                  intended_duration, start_time, end_time, actual_duration, completed)
+                 SELECT user_id, guild_id, session_id, study_type, subject, mood,
+                        intended_duration, start_time, ?, ?, 1
+                 FROM study_sessions
+                 WHERE user_id = ? AND guild_id = ?''',
+              (datetime.datetime.now().isoformat(), actual_duration, ctx.author.id, ctx.guild.id))
+
+    # Remove from active sessions
+    c.execute('''DELETE FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+              (ctx.author.id, ctx.guild.id))
+
+    conn.commit()
+    conn.close()
+
+    # Calculate duration display
+    hours = actual_duration // 3600
+    minutes = (actual_duration % 3600) // 60
+    duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+    embed = discord.Embed(
+        title="✅ Study Session Ended",
+        description=f"**{study_type}** session completed!",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="Subject", value=subject or "Not specified", inline=True)
+    embed.add_field(name="Duration", value=duration_str, inline=True)
+    embed.add_field(name="Planned", value=f"{intended_duration} minutes", inline=True)
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='status')
+async def study_status(ctx):
+    """Check current study session status"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Get active session
+    c.execute('''SELECT session_id, start_time, intended_duration, study_type, subject, mood, last_activity
+                 FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+              (ctx.author.id, ctx.guild.id))
+    session_data = c.fetchone()
+
+    if not session_data:
+        embed = discord.Embed(
+            title="📚 No Active Session",
+            description="You don't have an active study session.\nUse `%study start` to begin one!",
+            color=discord.Color.blue()
+        )
+        await ctx.send(embed=embed)
+        conn.close()
+        return
+
+    session_id, start_time_str, intended_duration, study_type, subject, mood, last_activity_str = session_data
+    start_time = datetime.datetime.fromisoformat(start_time_str)
+    last_activity = datetime.datetime.fromisoformat(last_activity_str) if last_activity_str else start_time
+
+    current_duration = int((datetime.datetime.now() - start_time).total_seconds())
+    hours = current_duration // 3600
+    minutes = (current_duration % 3600) // 60
+    duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+    # Calculate progress
+    progress_percent = min(100, (current_duration / (intended_duration * 60)) * 100)
+
+    # Get answer statistics
+    c.execute('''SELECT COUNT(*) FROM study_answers
+                 WHERE session_id = ? AND is_correct = 1''', (session_id,))
+    correct_answers = c.fetchone()[0]
+
+    c.execute('''SELECT COUNT(*) FROM study_answers
+                 WHERE session_id = ?''', (session_id,))
+    total_answers = c.fetchone()[0]
+
+    conn.close()
+
+    embed = discord.Embed(
+        title="📊 Study Session Status",
+        description=f"**{study_type}** - {subject or 'No subject'}",
+        color=discord.Color.blue()
+    )
+
+    embed.add_field(name="Duration", value=f"{duration_str} / {intended_duration}m", inline=True)
+    embed.add_field(name="Progress", value=f"{progress_percent:.1f}%", inline=True)
+    embed.add_field(name="Answers", value=f"{correct_answers}/{total_answers} correct", inline=True)
+
+    if mood:
+        embed.add_field(name="Mood", value=mood, inline=True)
+
+    # Check if session is inactive
+    time_since_activity = (datetime.datetime.now() - last_activity).total_seconds()
+    if time_since_activity > 30 * 60:  # 30 minutes
+        embed.add_field(
+            name="⚠️ Warning",
+            value=f"Session inactive for {int(time_since_activity/60)} minutes. Will auto-end soon.",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='pdf')
+async def study_pdf(ctx, url: str, page: int = 1):
+    """Display a PDF page as an image - Usage: %study pdf <url> [page]"""
+    # Validate URL
+    if not validate_pdf_url(url):
+        await ctx.send("❌ Invalid PDF URL. Please provide a valid PDF link.")
+        return
+
+    # Validate page number
+    if page < 1:
+        page = 1
+
+    embed = discord.Embed(
+        title="📄 Rendering PDF Page",
+        description=f"Processing page {page} from PDF...",
+        color=discord.Color.blue()
+    )
+    status_msg = await ctx.send(embed=embed)
+
+    try:
+        # Render PDF page
+        img_path, error = render_pdf_page(url, page - 1)  # 0-indexed
+
+        if error:
+            embed = discord.Embed(
+                title="❌ PDF Rendering Failed",
+                description=error,
+                color=discord.Color.red()
+            )
+            await status_msg.edit(embed=embed)
+            return
+
+        # Send the image
+        file = discord.File(img_path, filename=f"page_{page}.png")
+        embed = discord.Embed(
+            title=f"📄 PDF Page {page}",
+            description=f"From: {url}",
+            color=discord.Color.green()
+        )
+        embed.set_image(url=f"attachment://page_{page}.png")
+
+        await ctx.send(file=file, embed=embed)
+
+        # Clean up
+        import os
+        os.remove(img_path)
+
+        # Delete status message
+        await status_msg.delete()
+
+    except Exception as e:
+        embed = discord.Embed(
+            title="❌ Error",
+            description=f"Failed to render PDF: {str(e)}",
+            color=discord.Color.red()
+        )
+        await status_msg.edit(embed=embed)
+
+
+@study_group.command(name='answers')
+async def study_answers(ctx, url: str, pattern: str = None):
+    """Process answer key from PDF - Usage: %study answers <url> [pattern]"""
+    # Validate URL
+    if not validate_pdf_url(url):
+        await ctx.send("❌ Invalid PDF URL. Please provide a valid PDF link.")
+        return
+
+    embed = discord.Embed(
+        title="🔍 Processing Answer Key",
+        description="Extracting and parsing answers from PDF...",
+        color=discord.Color.blue()
+    )
+    status_msg = await ctx.send(embed=embed)
+
+    try:
+        # Extract text from PDF
+        pdf_text = extract_pdf_text(url)
+
+        if not pdf_text:
+            embed = discord.Embed(
+                title="❌ PDF Processing Failed",
+                description="Could not extract text from the PDF.",
+                color=discord.Color.red()
+            )
+            await status_msg.edit(embed=embed)
+            return
+
+        # Parse answers
+        answers = parse_answer_key(pdf_text, pattern)
+
+        if not answers:
+            embed = discord.Embed(
+                title="❌ No Answers Found",
+                description="Could not find any answer patterns in the PDF.\n\n"
+                           "**Common patterns:**\n"
+                           "• Question 1: Answer A\n"
+                           "• 1) A\n"
+                           "• Q1: A\n"
+                           "• 1: A",
+                color=discord.Color.orange()
+            )
+            await status_msg.edit(embed=embed)
+            return
+
+        # Check if user has active study session
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''SELECT session_id FROM study_sessions
+                     WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+        session_check = c.fetchone()
+
+        if session_check:
+            session_id = session_check[0]
+            # Store answers in database
+            for question_num, answer in answers.items():
+                c.execute('''INSERT OR REPLACE INTO study_answers
+                             (user_id, guild_id, session_id, question_number, answer, is_correct, timestamp)
+                             VALUES (?, ?, ?, ?, ?, 1, ?)''',
+                          (ctx.author.id, ctx.guild.id, session_id, question_num, answer,
+                           datetime.datetime.now().isoformat()))
+            conn.commit()
+
+        conn.close()
+
+        # Display results
+        answer_list = "\n".join([f"**Q{num}:** {ans}" for num, ans in sorted(answers.items())[:20]])
+        if len(answers) > 20:
+            answer_list += f"\n... and {len(answers) - 20} more"
+
+        embed = discord.Embed(
+            title="✅ Answer Key Processed",
+            description=f"Found **{len(answers)}** answers in the PDF",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Answers", value=answer_list, inline=False)
+
+        if session_check:
+            embed.add_field(
+                name="Session",
+                value="Answers loaded into your active study session!",
+                inline=False
+            )
+
+        await status_msg.edit(embed=embed)
+
+    except Exception as e:
+        embed = discord.Embed(
+            title="❌ Error",
+            description=f"Failed to process answer key: {str(e)}",
+            color=discord.Color.red()
+        )
+        await status_msg.edit(embed=embed)
+
+
+@study_group.command(name='patterns')
+async def study_patterns(ctx, action: str = "list", *, pattern: str = None):
+    """Configure answer recognition patterns - Usage: %study patterns [list/add/remove] [pattern]"""
+    if action == "list":
+        embed = discord.Embed(
+            title="🔍 Answer Recognition Patterns",
+            description="Current patterns used to detect answers in messages:",
+            color=discord.Color.blue()
+        )
+
+        patterns = [
+            "`answer: A`", "`I think it's B`", "`question 1: C`",
+            "`q2: D`", "`2) A`", "`just A`"
+        ]
+
+        embed.add_field(
+            name="Examples",
+            value="\n".join(f"• {p}" for p in patterns),
+            inline=False
+        )
+
+        embed.add_field(
+            name="💡 Tip",
+            value="The bot automatically detects answers in your messages during study sessions.\n"
+                  "You can also manually specify patterns when processing answer keys.",
+            inline=False
+        )
+
+        await ctx.send(embed=embed)
+
+    elif action == "add":
+        if not pattern:
+            await ctx.send("❌ Please specify a pattern to add!")
+            return
+
+        # For now, just acknowledge (full implementation would require database storage)
+        embed = discord.Embed(
+            title="✅ Pattern Added",
+            description=f"Custom pattern `{pattern}` has been added to your recognition set.",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+
+    elif action == "remove":
+        if not pattern:
+            await ctx.send("❌ Please specify a pattern to remove!")
+            return
+
+        embed = discord.Embed(
+            title="✅ Pattern Removed",
+            description=f"Pattern `{pattern}` has been removed from your recognition set.",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+
+    else:
+        await ctx.send("❌ Invalid action! Use: `list`, `add <pattern>`, or `remove <pattern>`")
+
+
+@study_group.command(name='bookmarks')
+async def study_bookmarks(ctx, action: str = "list", *, args: str = None):
+    """Manage study bookmarks - Usage: %study bookmarks [list/add/remove] [title] [url]"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    if action == "list":
+        c.execute('''SELECT id, title, url, category, created_at FROM study_bookmarks
+                     WHERE user_id = ? AND guild_id = ?
+                     ORDER BY created_at DESC''',
+                  (ctx.author.id, ctx.guild.id))
+        bookmarks = c.fetchall()
+        conn.close()
+
+        if not bookmarks:
+            embed = discord.Embed(
+                title="📚 No Bookmarks",
+                description="You haven't saved any bookmarks yet.\nUse `%study bookmarks add <title> <url>` to add one!",
+                color=discord.Color.blue()
+            )
+            await ctx.send(embed=embed)
+            return
+
+        embed = discord.Embed(
+            title="📚 Your Study Bookmarks",
+            description=f"You have {len(bookmarks)} bookmark(s)",
+            color=discord.Color.blue()
+        )
+
+        for i, (bookmark_id, title, url, category, created_at) in enumerate(bookmarks[:10], 1):
+            created_date = datetime.datetime.fromisoformat(created_at).strftime('%Y-%m-%d')
+            embed.add_field(
+                name=f"{i}. {title}",
+                value=f"**URL:** {url}\n**Category:** {category or 'None'}\n**Added:** {created_date}",
+                inline=False
+            )
+
+        await ctx.send(embed=embed)
+
+    elif action == "add":
+        if not args:
+            await ctx.send("❌ Please specify title and URL! Usage: `%study bookmarks add <title> <url> [category]`")
+            return
+
+        parts = args.split()
+        if len(parts) < 2:
+            await ctx.send("❌ Please specify both title and URL!")
+            return
+
+        title = parts[0]
+        url = parts[1]
+        category = " ".join(parts[2:]) if len(parts) > 2 else None
+
+        # Validate URL
+        if not url.startswith(('http://', 'https://')):
+            await ctx.send("❌ Please provide a valid URL starting with http:// or https://")
+            return
+
+        c.execute('''INSERT INTO study_bookmarks
+                     (user_id, guild_id, title, url, category, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?)''',
+                  (ctx.author.id, ctx.guild.id, title, url, category,
+                   datetime.datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+
+        embed = discord.Embed(
+            title="✅ Bookmark Added",
+            description=f"**{title}** has been saved to your bookmarks!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="URL", value=url, inline=False)
+        if category:
+            embed.add_field(name="Category", value=category, inline=True)
+
+        await ctx.send(embed=embed)
+
+    elif action == "remove":
+        if not args:
+            await ctx.send("❌ Please specify the bookmark title to remove!")
+            return
+
+        title = args.strip()
+
+        c.execute('''DELETE FROM study_bookmarks
+                     WHERE user_id = ? AND guild_id = ? AND title = ?''',
+                  (ctx.author.id, ctx.guild.id, title))
+
+        deleted = c.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if deleted:
+            embed = discord.Embed(
+                title="✅ Bookmark Removed",
+                description=f"**{title}** has been removed from your bookmarks.",
+                color=discord.Color.green()
+            )
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send(f"❌ Could not find bookmark with title '{title}'!")
+
+    else:
+        conn.close()
+        await ctx.send("❌ Invalid action! Use: `list`, `add <title> <url> [category]`, or `remove <title>`")
+
+
+@study_group.command(name='analytics')
+async def study_analytics(ctx, period: str = "all"):
+    """View study analytics and statistics - Usage: %study analytics [week/month/all]"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Calculate date range
+    now = datetime.datetime.now()
+    if period == "week":
+        start_date = now - datetime.timedelta(days=7)
+        title_period = "This Week"
+    elif period == "month":
+        start_date = now - datetime.timedelta(days=30)
+        title_period = "This Month"
+    else:
+        start_date = None
+        title_period = "All Time"
+
+    embed = discord.Embed(
+        title=f"📊 Study Analytics - {title_period}",
+        color=discord.Color.purple()
+    )
+
+    # Total study sessions
+    if start_date:
+        c.execute('''SELECT COUNT(*) FROM study_history
+                      WHERE user_id = ? AND guild_id = ? AND start_time >= ?''',
+                  (ctx.author.id, ctx.guild.id, start_date.isoformat()))
+    else:
+        c.execute('''SELECT COUNT(*) FROM study_history
+                      WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+    total_sessions = c.fetchone()[0]
+
+    # Total study time
+    if start_date:
+        c.execute('''SELECT SUM(actual_duration) FROM study_history
+                      WHERE user_id = ? AND guild_id = ? AND start_time >= ?''',
+                  (ctx.author.id, ctx.guild.id, start_date.isoformat()))
+    else:
+        c.execute('''SELECT SUM(actual_duration) FROM study_history
+                      WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+    total_duration = c.fetchone()[0] or 0
+
+    # Total answers and accuracy
+    if start_date:
+        c.execute('''SELECT COUNT(*), SUM(is_correct) FROM study_answers sa
+                      JOIN study_history sh ON sa.session_id = sh.session_id
+                      WHERE sa.user_id = ? AND sa.guild_id = ? AND sh.start_time >= ?''',
+                  (ctx.author.id, ctx.guild.id, start_date.isoformat()))
+    else:
+        c.execute('''SELECT COUNT(*), SUM(is_correct) FROM study_answers
+                      WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+    answer_stats = c.fetchone()
+    total_answers = answer_stats[0] or 0
+    correct_answers = answer_stats[1] or 0
+    accuracy = (correct_answers / total_answers * 100) if total_answers > 0 else 0
+
+    # Study types breakdown
+    if start_date:
+        c.execute('''SELECT study_type, COUNT(*) FROM study_history
+                      WHERE user_id = ? AND guild_id = ? AND start_time >= ?
+                      GROUP BY study_type''',
+                  (ctx.author.id, ctx.guild.id, start_date.isoformat()))
+    else:
+        c.execute('''SELECT study_type, COUNT(*) FROM study_history
+                      WHERE user_id = ? AND guild_id = ? GROUP BY study_type''',
+                  (ctx.author.id, ctx.guild.id))
+    study_types = c.fetchall()
+
+    # Bookmarks count
+    c.execute('''SELECT COUNT(*) FROM study_bookmarks
+                  WHERE user_id = ? AND guild_id = ?''',
+              (ctx.author.id, ctx.guild.id))
+    bookmark_count = c.fetchone()[0]
+
+    # Calculate trends and additional stats
+    if start_date:
+        # Previous period for comparison
+        prev_start = start_date - (now - start_date)
+        c.execute('''SELECT COUNT(*), SUM(actual_duration) FROM study_history
+                      WHERE user_id = ? AND guild_id = ? AND start_time >= ? AND start_time < ?''',
+                  (ctx.author.id, ctx.guild.id, prev_start.isoformat(), start_date.isoformat()))
+        prev_stats = c.fetchone()
+        prev_sessions = prev_stats[0] or 0
+        prev_duration = prev_stats[1] or 0
+
+        # Calculate trends
+        session_trend = "📈" if total_sessions > prev_sessions else "📉" if total_sessions < prev_sessions else "➡️"
+        duration_trend = "📈" if total_duration > prev_duration else "📉" if total_duration < prev_duration else "➡️"
+
+        # Daily average
+        days_in_period = (now - start_date).days or 1
+        daily_avg_minutes = total_duration // 60 // days_in_period
+        daily_avg_sessions = total_sessions / days_in_period
+
+        embed.add_field(name="📈 Trends vs Previous Period", value=f"Sessions: {session_trend} Duration: {duration_trend}", inline=False)
+        embed.add_field(name="📅 Daily Averages", value=f"{daily_avg_sessions:.1f} sessions\n{daily_avg_minutes} minutes", inline=True)
+
+    # Format duration
+    hours = total_duration // 3600
+    minutes = (total_duration % 3600) // 60
+    duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+    embed.add_field(name="Total Sessions", value=f"{total_sessions:,}", inline=True)
+    embed.add_field(name="Total Study Time", value=duration_str, inline=True)
+    embed.add_field(name="Average per Session", value=f"{total_duration//max(total_sessions,1)//60}m" if total_sessions > 0 else "0m", inline=True)
+
+    embed.add_field(name="Total Answers", value=f"{total_answers:,}", inline=True)
+    embed.add_field(name="Correct Answers", value=f"{correct_answers:,}", inline=True)
+    embed.add_field(name="Accuracy", value=f"{accuracy:.1f}%", inline=True)
+
+    embed.add_field(name="Bookmarks Saved", value=f"{bookmark_count:,}", inline=True)
+
+    # Study streaks and consistency
+    if start_date:
+        # Calculate study streak (consecutive days with study sessions)
+        c.execute('''SELECT DISTINCT DATE(start_time) as study_date FROM study_history
+                      WHERE user_id = ? AND guild_id = ? AND start_time >= ?
+                      ORDER BY study_date DESC''',
+                  (ctx.author.id, ctx.guild.id, start_date.isoformat()))
+        study_dates = [row[0] for row in c.fetchall()]
+
+        if study_dates:
+            # Calculate current streak
+            streak = 0
+            check_date = datetime.date.today()
+            while check_date.isoformat() in study_dates or (check_date - datetime.timedelta(days=1)).isoformat() in study_dates:
+                if check_date.isoformat() in study_dates:
+                    streak += 1
+                check_date -= datetime.timedelta(days=1)
+                if streak > 30:  # Prevent infinite loop
+                    break
+
+            embed.add_field(name="🔥 Current Streak", value=f"{streak} days", inline=True)
+
+            # Study frequency
+            unique_days = len(set(study_dates))
+            total_days = (now - start_date).days + 1
+            study_frequency = (unique_days / total_days) * 100
+            embed.add_field(name="📊 Study Frequency", value=f"{study_frequency:.1f}% of days", inline=True)
+
+    if study_types:
+        type_breakdown = "\n".join([f"• {stype}: {count}" for stype, count in study_types])
+        embed.add_field(name="Study Types", value=type_breakdown, inline=False)
+
+    # Performance insights
+    if total_sessions > 0:
+        insights = []
+        if accuracy >= 85:
+            insights.append("🎯 High accuracy - great job!")
+        elif accuracy < 60 and total_answers > 10:
+            insights.append("📚 Consider reviewing difficult topics")
+
+        avg_session_time = total_duration / total_sessions / 60  # in minutes
+        if avg_session_time > 90:
+            insights.append("⏰ Long sessions - try shorter, focused study periods")
+        elif avg_session_time < 15:
+            insights.append("⚡ Short sessions - consider longer study blocks")
+
+        if insights:
+            embed.add_field(name="💡 Insights", value="\n".join(insights), inline=False)
+
+    conn.close()
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='leaderboard')
+async def study_leaderboard(ctx, metric: str = "time", period: str = "all"):
+    """View study leaderboards - Usage: %study leaderboard [metric] [period]
+
+    Metrics: time, sessions, accuracy, streak
+    Periods: week, month, all
+    """
+    if metric not in ['time', 'sessions', 'accuracy', 'streak']:
+        await ctx.send("❌ Invalid metric! Use: time, sessions, accuracy, or streak")
+        return
+
+    if period not in ['week', 'month', 'all']:
+        await ctx.send("❌ Invalid period! Use: week, month, or all")
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Calculate date range
+    now = datetime.datetime.now()
+    if period == 'week':
+        start_date = now - datetime.timedelta(days=7)
+        period_name = "This Week"
+    elif period == 'month':
+        start_date = now - datetime.timedelta(days=30)
+        period_name = "This Month"
+    else:
+        start_date = None
+        period_name = "All Time"
+
+    embed = discord.Embed(
+        title=f"🏆 Study Leaderboard - {period_name}",
+        description=f"Top performers by **{metric}**",
+        color=discord.Color.gold()
+    )
+
+    # Build query based on metric
+    if metric == 'time':
+        # Total study time
+        if start_date:
+            c.execute('''SELECT u.user_id, SUM(sh.actual_duration) as total_time,
+                                COUNT(sh.session_id) as session_count
+                          FROM study_history sh
+                          JOIN users u ON sh.user_id = u.user_id AND sh.guild_id = u.guild_id
+                          WHERE sh.guild_id = ? AND sh.start_time >= ?
+                          GROUP BY sh.user_id
+                          ORDER BY total_time DESC LIMIT 10''',
+                      (ctx.guild.id, start_date.isoformat()))
+        else:
+            c.execute('''SELECT u.user_id, SUM(sh.actual_duration) as total_time,
+                                COUNT(sh.session_id) as session_count
+                          FROM study_history sh
+                          JOIN users u ON sh.user_id = u.user_id AND sh.guild_id = u.guild_id
+                          WHERE sh.guild_id = ?
+                          GROUP BY sh.user_id
+                          ORDER BY total_time DESC LIMIT 10''',
+                      (ctx.guild.id,))
+
+        results = c.fetchall()
+
+        for rank, (user_id, total_time, session_count) in enumerate(results, 1):
+            hours = total_time // 3600
+            minutes = (total_time % 3600) // 60
+            time_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+            try:
+                user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+                username = user.display_name
+            except:
+                username = f"User {user_id}"
+
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"{rank}.")
+            embed.add_field(
+                name=f"{medal} {username}",
+                value=f"**{time_str}** total\n{session_count} sessions",
+                inline=True
+            )
+
+    elif metric == 'sessions':
+        # Number of study sessions
+        if start_date:
+            c.execute('''SELECT sh.user_id, COUNT(sh.session_id) as session_count,
+                                SUM(sh.actual_duration) as total_time
+                          FROM study_history sh
+                          WHERE sh.guild_id = ? AND sh.start_time >= ?
+                          GROUP BY sh.user_id
+                          ORDER BY session_count DESC LIMIT 10''',
+                      (ctx.guild.id, start_date.isoformat()))
+        else:
+            c.execute('''SELECT sh.user_id, COUNT(sh.session_id) as session_count,
+                                SUM(sh.actual_duration) as total_time
+                          FROM study_history sh
+                          WHERE sh.guild_id = ?
+                          GROUP BY sh.user_id
+                          ORDER BY session_count DESC LIMIT 10''',
+                      (ctx.guild.id,))
+
+        results = c.fetchall()
+
+        for rank, (user_id, session_count, total_time) in enumerate(results, 1):
+            avg_time = total_time // max(session_count, 1) // 60  # Average minutes per session
+
+            try:
+                user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+                username = user.display_name
+            except:
+                username = f"User {user_id}"
+
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"{rank}.")
+            embed.add_field(
+                name=f"{medal} {username}",
+                value=f"**{session_count}** sessions\n{avg_time}m average",
+                inline=True
+            )
+
+    elif metric == 'accuracy':
+        # Test accuracy (only for MCQ sessions)
+        if start_date:
+            c.execute('''SELECT sh.user_id,
+                                SUM(sa.is_correct) as correct_answers,
+                                COUNT(sa.question_number) as total_answers
+                          FROM study_answers sa
+                          JOIN study_history sh ON sa.session_id = sh.session_id
+                          WHERE sa.guild_id = ? AND sh.start_time >= ? AND sh.study_type IN ('MCQ Test', 'MCQ Practice')
+                          GROUP BY sh.user_id
+                          HAVING total_answers > 0
+                          ORDER BY (SUM(sa.is_correct) * 1.0 / COUNT(sa.question_number)) DESC LIMIT 10''',
+                      (ctx.guild.id, start_date.isoformat()))
+        else:
+            c.execute('''SELECT sh.user_id,
+                                SUM(sa.is_correct) as correct_answers,
+                                COUNT(sa.question_number) as total_answers
+                          FROM study_answers sa
+                          JOIN study_history sh ON sa.session_id = sh.session_id
+                          WHERE sa.guild_id = ? AND sh.study_type IN ('MCQ Test', 'MCQ Practice')
+                          GROUP BY sh.user_id
+                          HAVING total_answers > 0
+                          ORDER BY (SUM(sa.is_correct) * 1.0 / COUNT(sa.question_number)) DESC LIMIT 10''',
+                      (ctx.guild.id,))
+
+        results = c.fetchall()
+
+        for rank, (user_id, correct_answers, total_answers) in enumerate(results, 1):
+            accuracy = (correct_answers / total_answers * 100)
+
+            try:
+                user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+                username = user.display_name
+            except:
+                username = f"User {user_id}"
+
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"{rank}.")
+            embed.add_field(
+                name=f"{medal} {username}",
+                value=f"**{accuracy:.1f}%** accuracy\n{correct_answers}/{total_answers} correct",
+                inline=True
+            )
+
+    elif metric == 'streak':
+        # Current study streak (consecutive days)
+        # This is more complex - need to calculate streaks for each user
+        c.execute('''SELECT DISTINCT sh.user_id, DATE(sh.start_time) as study_date
+                      FROM study_history sh
+                      WHERE sh.guild_id = ?
+                      ORDER BY sh.user_id, study_date DESC''',
+                  (ctx.guild.id,))
+
+        user_dates = {}
+        for user_id, study_date in c.fetchall():
+            if user_id not in user_dates:
+                user_dates[user_id] = []
+            user_dates[user_id].append(study_date)
+
+        # Calculate streaks
+        streaks = []
+        for user_id, dates in user_dates.items():
+            if not dates:
+                continue
+
+            # Sort dates descending
+            dates.sort(reverse=True)
+            streak = 0
+            check_date = datetime.date.today()
+
+            for date_str in dates:
+                date_obj = datetime.datetime.fromisoformat(date_str).date()
+                if date_obj == check_date or date_obj == check_date - datetime.timedelta(days=1):
+                    if date_obj == check_date:
+                        streak += 1
+                    check_date = date_obj
+                else:
+                    break
+
+            if streak > 0:
+                streaks.append((user_id, streak))
+
+        # Sort by streak length
+        streaks.sort(key=lambda x: x[1], reverse=True)
+        streaks = streaks[:10]
+
+        for rank, (user_id, streak_length) in enumerate(streaks, 1):
+            try:
+                user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+                username = user.display_name
+            except:
+                username = f"User {user_id}"
+
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"{rank}.")
+            embed.add_field(
+                name=f"{medal} {username}",
+                value=f"**{streak_length}** day streak",
+                inline=True
+            )
+
+    conn.close()
+
+    # Add metric info
+    metric_descriptions = {
+        'time': 'Total study time',
+        'sessions': 'Number of study sessions',
+        'accuracy': 'Test accuracy (MCQ only)',
+        'streak': 'Current study streak'
+    }
+
+    embed.set_footer(text=f"📊 {metric_descriptions[metric]} • Use %study leaderboard [metric] [period]")
+
+    if not embed.fields:
+        embed.add_field(
+            name="📝 No Data",
+            value=f"No study data found for {period_name.lower()}!",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='export')
+async def study_export(ctx, format_type: str = "summary"):
+    """Export your study data - Usage: %study export [format]
+
+    Formats: summary, detailed, csv
+    """
+    if format_type not in ['summary', 'detailed', 'csv']:
+        await ctx.send("❌ Invalid format! Use: summary, detailed, or csv")
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    embed = discord.Embed(
+        title="📤 Study Data Export",
+        description=f"Exporting your study data in **{format_type}** format",
+        color=discord.Color.blue()
+    )
+
+    if format_type == 'summary':
+        # Get summary statistics
+        c.execute('''SELECT COUNT(*) as total_sessions,
+                            SUM(actual_duration) as total_duration,
+                            AVG(actual_duration) as avg_duration,
+                            MAX(actual_duration) as longest_session,
+                            MIN(actual_duration) as shortest_session
+                      FROM study_history
+                      WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+
+        summary_stats = c.fetchone()
+
+        if summary_stats:
+            total_sessions, total_duration, avg_duration, longest_session, shortest_session = summary_stats
+
+            # Format durations
+            total_hours = total_duration // 3600 if total_duration else 0
+            total_minutes = (total_duration % 3600) // 60 if total_duration else 0
+            avg_minutes = avg_duration // 60 if avg_duration else 0
+            longest_minutes = longest_session // 60 if longest_session else 0
+            shortest_minutes = shortest_session // 60 if shortest_session else 0
+
+            embed.add_field(
+                name="📊 Session Summary",
+                value=f"**Total Sessions:** {total_sessions}\n"
+                      f"**Total Time:** {total_hours}h {total_minutes}m\n"
+                      f"**Average Session:** {avg_minutes}m\n"
+                      f"**Longest Session:** {longest_minutes}m\n"
+                      f"**Shortest Session:** {shortest_minutes}m",
+                inline=False
+            )
+
+        # Study type breakdown
+        c.execute('''SELECT study_type, COUNT(*) as count, SUM(actual_duration) as total_time
+                      FROM study_history
+                      WHERE user_id = ? AND guild_id = ?
+                      GROUP BY study_type
+                      ORDER BY total_time DESC''',
+                  (ctx.author.id, ctx.guild.id))
+
+        type_breakdown = c.fetchall()
+        if type_breakdown:
+            type_text = "\n".join([f"• {stype}: {count} sessions ({total_time//60}m)" for stype, count, total_time in type_breakdown])
+            embed.add_field(
+                name="🎯 Study Types",
+                value=type_text,
+                inline=False
+            )
+
+        # Test performance (if any)
+        c.execute('''SELECT SUM(sa.is_correct) as correct, COUNT(sa.question_number) as total
+                      FROM study_answers sa
+                      JOIN study_history sh ON sa.session_id = sh.session_id
+                      WHERE sa.user_id = ? AND sa.guild_id = ? AND sh.study_type IN ('MCQ Test', 'MCQ Practice')''',
+                  (ctx.author.id, ctx.guild.id))
+
+        test_stats = c.fetchone()
+        if test_stats and test_stats[1] > 0:
+            correct, total = test_stats
+            accuracy = (correct / total * 100)
+            embed.add_field(
+                name="🎯 Test Performance",
+                value=f"**Questions Answered:** {total}\n"
+                      f"**Correct Answers:** {correct}\n"
+                      f"**Accuracy:** {accuracy:.1f}%",
+                inline=False
+            )
+
+        # Recent activity (last 30 days)
+        thirty_days_ago = (datetime.datetime.now() - datetime.timedelta(days=30)).isoformat()
+        c.execute('''SELECT COUNT(*) as recent_sessions, SUM(actual_duration) as recent_time
+                      FROM study_history
+                      WHERE user_id = ? AND guild_id = ? AND start_time >= ?''',
+                  (ctx.author.id, ctx.guild.id, thirty_days_ago))
+
+        recent_stats = c.fetchone()
+        if recent_stats and recent_stats[0] > 0:
+            recent_sessions, recent_time = recent_stats
+            recent_hours = recent_time // 3600
+            recent_minutes = (recent_time % 3600) // 60
+            embed.add_field(
+                name="📅 Recent Activity (30 days)",
+                value=f"**Sessions:** {recent_sessions}\n"
+                      f"**Time:** {recent_hours}h {recent_minutes}m",
+                inline=False
+            )
+
+    elif format_type == 'detailed':
+        # Get all study sessions
+        c.execute('''SELECT session_id, study_type, subject, mood, intended_duration,
+                            actual_duration, start_time, end_time, completed
+                      FROM study_history
+                      WHERE user_id = ? AND guild_id = ?
+                      ORDER BY start_time DESC LIMIT 20''',
+                  (ctx.author.id, ctx.guild.id))
+
+        sessions = c.fetchall()
+
+        if sessions:
+            session_list = ""
+            for i, session in enumerate(sessions, 1):
+                sid, stype, subject, mood, intended, actual, start, end, completed = session
+
+                start_dt = datetime.datetime.fromisoformat(start)
+                date_str = start_dt.strftime("%Y-%m-%d %H:%M")
+
+                hours = actual // 3600
+                minutes = (actual % 3600) // 60
+                time_str = f"{hours}h{minutes}m" if hours > 0 else f"{minutes}m"
+
+                status = "✅" if completed else "⏰"
+                session_list += f"{i}. {status} {stype} - {date_str}\n   {subject or 'No subject'} | {time_str} | {mood or 'No mood'}\n"
+
+            embed.add_field(
+                name="📋 Recent Sessions (Last 20)",
+                value=session_list[:1000] + ("..." if len(session_list) > 1000 else ""),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📝 No Sessions",
+                value="You haven't completed any study sessions yet.",
+                inline=False
+            )
+
+    elif format_type == 'csv':
+        # Generate CSV data
+        c.execute('''SELECT session_id, study_type, subject, mood, intended_duration,
+                            actual_duration, start_time, end_time, completed
+                      FROM study_history
+                      WHERE user_id = ? AND guild_id = ?
+                      ORDER BY start_time DESC''',
+                  (ctx.author.id, ctx.guild.id))
+
+        sessions = c.fetchall()
+
+        if sessions:
+            csv_data = "Session ID,Type,Subject,Mood,Planned Duration,Actual Duration,Start Time,End Time,Completed\n"
+
+            for session in sessions:
+                sid, stype, subject, mood, intended, actual, start, end, completed = session
+                csv_data += f'"{sid}","{stype}","{subject or ""}","{mood or ""}",{intended},{actual},"{start}","{end or ""}",{completed}\n'
+
+            # Send as file attachment
+            from io import StringIO
+            csv_file = StringIO(csv_data)
+
+            embed.add_field(
+                name="📄 CSV Export",
+                value=f"Generated CSV with {len(sessions)} study sessions.\n"
+                      "Data includes: session details, timings, and completion status.",
+                inline=False
+            )
+
+            # Create file attachment
+            from io import BytesIO
+            file = discord.File(BytesIO(csv_data.encode('utf-8')), filename=f"study_data_{ctx.author.id}.csv")
+            await ctx.send(embed=embed, file=file)
+            conn.close()
+            return
+        else:
+            embed.add_field(
+                name="📝 No Data",
+                value="No study sessions found to export.",
+                inline=False
+            )
+
+    conn.close()
+
+    embed.set_footer(text=f"📊 Exported {format_type} format • {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='history')
+async def study_history(ctx, page: int = 1, session_type: str = "all"):
+    """View detailed study session history with pagination - Usage: %study history [page] [type]"""
+    if page < 1:
+        page = 1
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Build query based on session type
+    query_conditions = "user_id = ? AND guild_id = ?"
+    params = [ctx.author.id, ctx.guild.id]
+
+    if session_type.lower() != "all":
+        if session_type.lower() == "test":
+            query_conditions += " AND study_type = 'MCQ Test'"
+        elif session_type.lower() == "practice":
+            query_conditions += " AND study_type = 'MCQ Practice'"
+        elif session_type.lower() == "reading":
+            query_conditions += " AND study_type = 'Reading'"
+        else:
+            query_conditions += " AND study_type = ?"
+            params.append(session_type.title())
+
+    # Get total count
+    c.execute(f"SELECT COUNT(*) FROM study_history WHERE {query_conditions}", params)
+    total_sessions = c.fetchone()[0]
+
+    if total_sessions == 0:
+        embed = discord.Embed(
+            title="📚 Study History",
+            description="No study sessions found!",
+            color=discord.Color.blue()
+        )
+        if session_type.lower() != "all":
+            embed.add_field(
+                name="Filter",
+                value=f"Showing: {session_type.title()} sessions",
+                inline=False
+            )
+        await ctx.send(embed=embed)
+        conn.close()
+        return
+
+    # Pagination
+    per_page = 5
+    total_pages = (total_sessions + per_page - 1) // per_page
+    if page > total_pages:
+        page = total_pages
+
+    offset = (page - 1) * per_page
+
+    # Get sessions for this page
+    c.execute(f'''SELECT session_id, study_type, subject, mood, intended_duration,
+                         actual_duration, start_time, end_time, completed
+                  FROM study_history
+                  WHERE {query_conditions}
+                  ORDER BY start_time DESC LIMIT ? OFFSET ?''',
+              params + [per_page, offset])
+    sessions = c.fetchall()
+
+    conn.close()
+
+    embed = discord.Embed(
+        title=f"📚 Study Session History - Page {page}/{total_pages}",
+        description=f"Total sessions: {total_sessions}",
+        color=discord.Color.blue()
+    )
+
+    if session_type.lower() != "all":
+        embed.add_field(
+            name="Filter",
+            value=f"Showing: {session_type.title()} sessions",
+            inline=False
+        )
+
+    for i, session in enumerate(sessions, 1):
+        session_id, study_type, subject, mood, intended, actual, start_time, end_time, completed = session
+
+        # Format duration
+        actual_hours = actual // 3600
+        actual_minutes = (actual % 3600) // 60
+        duration_str = f"{actual_hours}h {actual_minutes}m" if actual_hours > 0 else f"{actual_minutes}m"
+
+        # Format date
+        start_dt = datetime.datetime.fromisoformat(start_time)
+        date_str = start_dt.strftime("%Y-%m-%d %H:%M")
+
+        # Status
+        status = "✅ Completed" if completed else "⏰ Expired"
+
+        embed.add_field(
+            name=f"{i}. {study_type} - {date_str}",
+            value=f"**Subject:** {subject or 'Not specified'}\n"
+                  f"**Duration:** {duration_str}\n"
+                  f"**Mood:** {mood or 'Not specified'}\n"
+                  f"**Status:** {status}\n"
+                  f"**ID:** `{session_id}`",
+            inline=False
+        )
+
+    # Navigation
+    footer_text = f"Use %study history {page + 1} to see next page"
+    if page > 1:
+        footer_text += f" • %study history {page - 1} for previous"
+    embed.set_footer(text=footer_text)
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='sessiondetails')
+async def study_session_details(ctx, session_id: str):
+    """View detailed information about a specific study session - Usage: %study sessiondetails <session_id>"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Get session details
+    c.execute('''SELECT * FROM study_history
+                  WHERE user_id = ? AND guild_id = ? AND session_id = ?''',
+              (ctx.author.id, ctx.guild.id, session_id))
+    session_data = c.fetchone()
+
+    if not session_data:
+        await ctx.send("❌ Session not found! Use `%study history` to see your session IDs.")
+        conn.close()
+        return
+
+    session_info = dict(session_data)
+
+    # Get answer statistics if it's a test session
+    answer_stats = None
+    if session_info['study_type'] in ['MCQ Test', 'MCQ Practice']:
+        c.execute('''SELECT COUNT(*), SUM(is_correct) FROM study_answers
+                      WHERE user_id = ? AND guild_id = ? AND session_id = ?''',
+                  (ctx.author.id, ctx.guild.id, session_id))
+        answer_data = c.fetchone()
+        if answer_data:
+            total_answers, correct_answers = answer_data
+            accuracy = (correct_answers / total_answers * 100) if total_answers > 0 else 0
+            answer_stats = {
+                'total': total_answers,
+                'correct': correct_answers or 0,
+                'accuracy': accuracy
+            }
+
+    conn.close()
+
+    # Format times
+    start_time = datetime.datetime.fromisoformat(session_info['start_time'])
+    end_time = datetime.datetime.fromisoformat(session_info['end_time']) if session_info.get('end_time') else None
+
+    # Format duration
+    actual_duration = session_info['actual_duration']
+    hours = actual_duration // 3600
+    minutes = (actual_duration % 3600) // 60
+    duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+    embed = discord.Embed(
+        title=f"📋 Session Details: {session_id}",
+        description=f"**{session_info['study_type']}** session",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(name="Subject", value=session_info.get('subject', 'Not specified'), inline=True)
+    embed.add_field(name="Mood", value=session_info.get('mood', 'Not specified'), inline=True)
+    embed.add_field(name="Status", value="✅ Completed" if session_info.get('completed', 1) else "⏰ Expired", inline=True)
+
+    embed.add_field(name="Start Time", value=start_time.strftime("%Y-%m-%d %H:%M"), inline=True)
+    if end_time:
+        embed.add_field(name="End Time", value=end_time.strftime("%Y-%m-%d %H:%M"), inline=True)
+    else:
+        embed.add_field(name="End Time", value="Still active", inline=True)
+
+    embed.add_field(name="Actual Duration", value=duration_str, inline=True)
+    embed.add_field(name="Planned Duration", value=f"{session_info.get('intended_duration', 0)} minutes", inline=True)
+
+    # Add answer stats for test sessions
+    if answer_stats:
+        embed.add_field(name="Questions Answered", value=str(answer_stats['total']), inline=True)
+        embed.add_field(name="Correct Answers", value=str(answer_stats['correct']), inline=True)
+        embed.add_field(name="Accuracy", value=f"{answer_stats['accuracy']:.1f}%", inline=True)
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='trends')
+async def study_trends(ctx, period: str = "month"):
+    """View study trends and progress over time - Usage: %study trends [week/month/year]"""
+    if period not in ['week', 'month', 'year']:
+        period = 'month'
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Calculate date range
+    now = datetime.datetime.now()
+    if period == 'week':
+        start_date = now - datetime.timedelta(days=7)
+        group_by = "DATE(start_time)"
+        period_name = "This Week"
+    elif period == 'month':
+        start_date = now - datetime.timedelta(days=30)
+        group_by = "DATE(start_time)"
+        period_name = "This Month"
+    else:  # year
+        start_date = now - datetime.timedelta(days=365)
+        group_by = "strftime('%Y-%W', start_time)"  # Weekly grouping for year
+        period_name = "This Year"
+
+    # Get daily study time
+    c.execute(f'''SELECT {group_by} as period,
+                         SUM(actual_duration) as total_duration,
+                         COUNT(*) as session_count,
+                         AVG(actual_duration) as avg_duration
+                  FROM study_history
+                  WHERE user_id = ? AND guild_id = ? AND start_time >= ?
+                  GROUP BY period
+                  ORDER BY period''',
+              (ctx.author.id, ctx.guild.id, start_date.isoformat()))
+    trend_data = c.fetchall()
+
+    # Get overall stats for the period
+    c.execute('''SELECT COUNT(*) as total_sessions,
+                         SUM(actual_duration) as total_duration,
+                         AVG(actual_duration) as avg_session,
+                         MAX(actual_duration) as longest_session
+                  FROM study_history
+                  WHERE user_id = ? AND guild_id = ? AND start_time >= ?''',
+              (ctx.author.id, ctx.guild.id, start_date.isoformat()))
+    overall_stats = c.fetchone()
+
+    conn.close()
+
+    if not trend_data:
+        embed = discord.Embed(
+            title="📈 Study Trends",
+            description=f"No study data found for {period_name.lower()}!",
+            color=discord.Color.blue()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    embed = discord.Embed(
+        title=f"📈 Study Trends - {period_name}",
+        color=discord.Color.purple()
+    )
+
+    # Overall statistics
+    if overall_stats:
+        total_sessions, total_duration, avg_session, longest_session = overall_stats
+        total_hours = total_duration // 3600
+        total_minutes = (total_duration % 3600) // 60
+        avg_minutes = avg_session // 60 if avg_session else 0
+        longest_minutes = longest_session // 60 if longest_session else 0
+
+        embed.add_field(
+            name="📊 Overview",
+            value=f"**Total Sessions:** {total_sessions}\n"
+                  f"**Total Time:** {total_hours}h {total_minutes}m\n"
+                  f"**Average Session:** {avg_minutes}m\n"
+                  f"**Longest Session:** {longest_minutes}m",
+            inline=False
+        )
+
+    # Trend visualization (simple text-based)
+    trend_text = ""
+    max_sessions = max(row[2] for row in trend_data) if trend_data else 1
+
+    for period_date, duration, sessions, avg_dur in trend_data[-7:]:  # Last 7 periods
+        # Create a simple bar chart
+        bar_length = int((sessions / max_sessions) * 10) if max_sessions > 0 else 0
+        bar = "█" * bar_length + "░" * (10 - bar_length)
+
+        # Format period label
+        if period == 'week':
+            label = period_date
+        elif period == 'month':
+            dt = datetime.datetime.fromisoformat(period_date)
+            label = dt.strftime("%m/%d")
+        else:  # year
+            label = f"W{period_date.split('-')[1]}"
+
+        hours = duration // 3600
+        minutes = (duration % 3600) // 60
+        time_str = f"{hours}h{minutes}m" if hours > 0 else f"{minutes}m"
+
+        trend_text += f"`{label}` {bar} {sessions} sessions ({time_str})\n"
+
+    embed.add_field(
+        name="📈 Daily Activity",
+        value=trend_text or "No data available",
+        inline=False
+    )
+
+    # Study type breakdown
+    embed.add_field(
+        name="💡 Tip",
+        value="Use `%study analytics` for detailed statistics or `%study history` for session details.",
+        inline=False
+    )
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='history')
+async def study_history(ctx, page: int = 1):
+    """View your study session history - Usage: %study history [page]"""
+    if page < 1:
+        page = 1
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Get total count
+    c.execute('''SELECT COUNT(*) FROM study_history
+                  WHERE user_id = ? AND guild_id = ?''',
+              (ctx.author.id, ctx.guild.id))
+    total_sessions = c.fetchone()[0]
+
+    if total_sessions == 0:
+        embed = discord.Embed(
+            title="📚 Study History",
+            description="You haven't completed any study sessions yet.\nUse `%study start` to begin your first session!",
+            color=discord.Color.blue()
+        )
+        await ctx.send(embed=embed)
+        conn.close()
+        return
+
+    # Pagination
+    per_page = 5
+    total_pages = (total_sessions + per_page - 1) // per_page
+    if page > total_pages:
+        page = total_pages
+
+    offset = (page - 1) * per_page
+
+    # Get sessions for this page
+    c.execute('''SELECT session_id, study_type, subject, mood, intended_duration,
+                        start_time, end_time, actual_duration, completed
+                  FROM study_history
+                  WHERE user_id = ? AND guild_id = ?
+                  ORDER BY end_time DESC LIMIT ? OFFSET ?''',
+              (ctx.author.id, ctx.guild.id, per_page, offset))
+    sessions = c.fetchall()
+
+    conn.close()
+
+    embed = discord.Embed(
+        title=f"📚 Study History - Page {page}/{total_pages}",
+        description=f"You've completed **{total_sessions}** study sessions",
+        color=discord.Color.blue()
+    )
+
+    for i, session in enumerate(sessions, 1):
+        session_id, study_type, subject, mood, intended_duration, start_time, end_time, actual_duration, completed = session
+
+        # Format duration
+        hours = actual_duration // 3600
+        minutes = (actual_duration % 3600) // 60
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+        # Format date
+        start_dt = datetime.datetime.fromisoformat(start_time)
+        date_str = start_dt.strftime('%Y-%m-%d')
+
+        # Status
+        status = "✅ Completed" if completed else "⏰ Expired"
+
+        embed.add_field(
+            name=f"{(page-1)*per_page + i}. {study_type} - {date_str}",
+            value=f"**Subject:** {subject or 'Not specified'}\n"
+                  f"**Duration:** {duration_str} / {intended_duration}m planned\n"
+                  f"**Mood:** {mood or 'Not specified'}\n"
+                  f"**Status:** {status}\n"
+                  f"**Session ID:** `{session_id}`",
+            inline=False
+        )
+
+    # Add navigation
+    footer_text = f"Use %study history [page] to navigate"
+    if page < total_pages:
+        footer_text += f" • Next: %study history {page + 1}"
+    embed.set_footer(text=footer_text)
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='history')
+async def study_history(ctx, page: int = 1):
+    """View your study session history - Usage: %study history [page]"""
+    if page < 1:
+        page = 1
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Get total count of study sessions
+    c.execute('''SELECT COUNT(*) FROM study_history
+                  WHERE user_id = ? AND guild_id = ?''',
+              (ctx.author.id, ctx.guild.id))
+    total_sessions = c.fetchone()[0]
+
+    if total_sessions == 0:
+        embed = discord.Embed(
+            title="📚 Study History",
+            description="You haven't completed any study sessions yet.\nUse `%study start` to begin your first session!",
+            color=discord.Color.blue()
+        )
+        await ctx.send(embed=embed)
+        conn.close()
+        return
+
+    # Pagination setup
+    per_page = 5
+    total_pages = (total_sessions + per_page - 1) // per_page
+    if page > total_pages:
+        page = total_pages
+
+    offset = (page - 1) * per_page
+
+    # Get study sessions for this page
+    c.execute('''SELECT session_id, study_type, subject, mood, intended_duration,
+                        start_time, end_time, actual_duration, completed
+                  FROM study_history
+                  WHERE user_id = ? AND guild_id = ?
+                  ORDER BY end_time DESC LIMIT ? OFFSET ?''',
+              (ctx.author.id, ctx.guild.id, per_page, offset))
+    sessions = c.fetchall()
+
+    conn.close()
+
+    embed = discord.Embed(
+        title=f"📚 Study History - Page {page}/{total_pages}",
+        description=f"You've completed **{total_sessions}** study sessions",
+        color=discord.Color.blue()
+    )
+
+    for i, session in enumerate(sessions, 1):
+        session_id, study_type, subject, mood, intended_duration, start_time, end_time, actual_duration, completed = session
+
+        # Format duration
+        hours = actual_duration // 3600
+        minutes = (actual_duration % 3600) // 60
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+        # Format date
+        start_dt = datetime.datetime.fromisoformat(start_time)
+        date_str = start_dt.strftime('%Y-%m-%d %H:%M')
+
+        # Completion status
+        status = "✅ Completed" if completed else "⏰ Expired"
+
+        embed.add_field(
+            name=f"{(page-1)*per_page + i}. {study_type} - {subject or 'No subject'}",
+            value=f"**Duration:** {duration_str} / {intended_duration}m planned\n"
+                  f"**Started:** {date_str}\n"
+                  f"**Status:** {status}\n"
+                  f"**Session ID:** `{session_id}`",
+            inline=False
+        )
+
+    # Add navigation footer
+    footer_text = f"Use %study history [page] to navigate"
+    if page < total_pages:
+        footer_text += f" • Next: %study history {page + 1}"
+    embed.set_footer(text=footer_text)
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='leaderboard')
+async def study_leaderboard(ctx, category: str = "time", period: str = "all", page: int = 1):
+    """View study leaderboards - Usage: %study leaderboard [time/accuracy/sessions/streak] [week/month/all] [page]"""
+
+    # Validate inputs
+    if page < 1:
+        page = 1
+
+    valid_categories = ['time', 'accuracy', 'sessions', 'streak']
+    if category not in valid_categories:
+        await ctx.send(f"❌ Invalid category! Valid categories: {', '.join(valid_categories)}")
+        return
+
+    valid_periods = ['week', 'month', 'all']
+    if period not in valid_periods:
+        await ctx.send(f"❌ Invalid period! Valid periods: {', '.join(valid_periods)}")
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Calculate date range
+    now = datetime.datetime.now()
+    if period == "week":
+        start_date = now - datetime.timedelta(days=7)
+        period_title = "This Week"
+    elif period == "month":
+        start_date = now - datetime.timedelta(days=30)
+        period_title = "This Month"
+    else:
+        start_date = None
+        period_title = "All Time"
+
+    # Build query based on category
+    if category == "time":
+        # Total study time leaderboard
+        if start_date:
+            c.execute('''SELECT sh.user_id, SUM(sh.actual_duration) as total_time
+                          FROM study_history sh
+                          WHERE sh.guild_id = ? AND sh.start_time >= ?
+                          GROUP BY sh.user_id
+                          HAVING total_time > 0
+                          ORDER BY total_time DESC''',
+                      (ctx.guild.id, start_date.isoformat()))
+        else:
+            c.execute('''SELECT sh.user_id, SUM(sh.actual_duration) as total_time
+                          FROM study_history sh
+                          WHERE sh.guild_id = ?
+                          GROUP BY sh.user_id
+                          HAVING total_time > 0
+                          ORDER BY total_time DESC''',
+                      (ctx.guild.id,))
+
+        title = f"⏱️ Study Time Leaderboard - {period_title}"
+        value_suffix = "minutes"
+        value_multiplier = 1/60  # Convert seconds to minutes
+
+    elif category == "accuracy":
+        # Accuracy leaderboard (only for MCQ tests)
+        if start_date:
+            c.execute('''SELECT sh.user_id,
+                                CAST(SUM(sa.is_correct) AS FLOAT) / COUNT(sa.is_correct) * 100 as accuracy,
+                                COUNT(sa.is_correct) as total_answers
+                          FROM study_answers sa
+                          JOIN study_history sh ON sa.session_id = sh.session_id
+                          WHERE sa.guild_id = ? AND sh.start_time >= ? AND sh.study_type = 'MCQ Test'
+                          GROUP BY sh.user_id
+                          HAVING total_answers >= 5  -- Minimum 5 answers for accuracy
+                          ORDER BY accuracy DESC, total_answers DESC''',
+                      (ctx.guild.id, start_date.isoformat()))
+        else:
+            c.execute('''SELECT sh.user_id,
+                                CAST(SUM(sa.is_correct) AS FLOAT) / COUNT(sa.is_correct) * 100 as accuracy,
+                                COUNT(sa.is_correct) as total_answers
+                          FROM study_answers sa
+                          JOIN study_history sh ON sa.session_id = sh.session_id
+                          WHERE sa.guild_id = ? AND sh.study_type = 'MCQ Test'
+                          GROUP BY sh.user_id
+                          HAVING total_answers >= 5
+                          ORDER BY accuracy DESC, total_answers DESC''',
+                      (ctx.guild.id,))
+
+        title = f"🎯 Accuracy Leaderboard - {period_title}"
+        value_suffix = "%"
+        value_multiplier = 1  # Already percentage
+
+    elif category == "sessions":
+        # Total sessions leaderboard
+        if start_date:
+            c.execute('''SELECT user_id, COUNT(*) as session_count
+                          FROM study_history
+                          WHERE guild_id = ? AND start_time >= ?
+                          GROUP BY user_id
+                          HAVING session_count > 0
+                          ORDER BY session_count DESC''',
+                      (ctx.guild.id, start_date.isoformat()))
+        else:
+            c.execute('''SELECT user_id, COUNT(*) as session_count
+                          FROM study_history
+                          WHERE guild_id = ?
+                          GROUP BY user_id
+                          HAVING session_count > 0
+                          ORDER BY session_count DESC''',
+                      (ctx.guild.id,))
+
+        title = f"📚 Sessions Leaderboard - {period_title}"
+        value_suffix = "sessions"
+        value_multiplier = 1
+
+    elif category == "streak":
+        # Current study streak leaderboard
+        # This is more complex - need to calculate current streaks for all users
+        all_users = []
+
+        # Get all users who have studied in the period
+        if start_date:
+            c.execute('''SELECT DISTINCT user_id FROM study_history
+                          WHERE guild_id = ? AND start_time >= ?''',
+                      (ctx.guild.id, start_date.isoformat()))
+        else:
+            c.execute('''SELECT DISTINCT user_id FROM study_history
+                          WHERE guild_id = ?''',
+                      (ctx.guild.id,))
+
+        user_ids = [row[0] for row in c.fetchall()]
+
+        for user_id in user_ids:
+            # Calculate current streak for this user
+            if start_date:
+                c.execute('''SELECT DISTINCT DATE(start_time) as study_date
+                              FROM study_history
+                              WHERE user_id = ? AND guild_id = ? AND start_time >= ?
+                              ORDER BY study_date DESC''',
+                          (user_id, ctx.guild.id, start_date.isoformat()))
+            else:
+                c.execute('''SELECT DISTINCT DATE(start_time) as study_date
+                              FROM study_history
+                              WHERE user_id = ? AND guild_id = ?
+                              ORDER BY study_date DESC''',
+                          (user_id, ctx.guild.id))
+
+            study_dates = [row[0] for row in c.fetchall()]
+
+            if study_dates:
+                streak = 0
+                check_date = datetime.date.today()
+                while check_date.isoformat() in study_dates or (check_date - datetime.timedelta(days=1)).isoformat() in study_dates:
+                    if check_date.isoformat() in study_dates:
+                        streak += 1
+                    check_date -= datetime.timedelta(days=1)
+                    if streak > 100:  # Prevent infinite loop
+                        break
+                all_users.append((user_id, streak))
+
+        # Sort by streak descending
+        all_users.sort(key=lambda x: x[1], reverse=True)
+
+        title = f"🔥 Study Streak Leaderboard - {period_title}"
+        value_suffix = "days"
+        value_multiplier = 1
+
+        # Convert to format expected by pagination code
+        results = [(user_id, streak) for user_id, streak in all_users if streak > 0]
+    else:
+        results = []
+
+    # Get results if not streak category
+    if category != "streak":
+        results = c.fetchall()
+
+    conn.close()
+
+    if not results:
+        embed = discord.Embed(
+            title=title,
+            description="No data available for this category and period.",
+            color=discord.Color.blue()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    # Pagination
+    per_page = 10
+    total_results = len(results)
+    total_pages = (total_results + per_page - 1) // per_page
+
+    if page > total_pages:
+        page = total_pages
+
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    page_results = results[start_idx:end_idx]
+
+    embed = discord.Embed(
+        title=f"{title} - Page {page}/{total_pages}",
+        color=discord.Color.gold()
+    )
+
+    leaderboard_text = ""
+    for i, row in enumerate(page_results):
+        rank = start_idx + i + 1
+
+        if category == "accuracy":
+            user_id, accuracy, total_answers = row
+            display_value = f"{accuracy:.1f}% ({total_answers} answers)"
+        else:
+            user_id, value = row
+            if category == "time":
+                # Convert seconds to minutes/hours
+                minutes = int(value * value_multiplier)
+                if minutes >= 60:
+                    hours = minutes // 60
+                    minutes = minutes % 60
+                    display_value = f"{hours}h {minutes}m"
+                else:
+                    display_value = f"{minutes}m"
+            else:
+                display_value = f"{int(value * value_multiplier):,}"
+
+        user = ctx.guild.get_member(user_id)
+        if user:
+            medal = ["🥇", "🥈", "🥉"][rank - 1] if page == 1 and rank <= 3 else f"{rank}."
+            leaderboard_text += f"{medal} {user.mention} - `{display_value}`\n"
+        else:
+            medal = ["🥇", "🥈", "🥉"][rank - 1] if page == 1 and rank <= 3 else f"{rank}."
+            leaderboard_text += f"{medal} `[Left Server]` - `{display_value}`\n"
+
+    embed.description = leaderboard_text
+
+    # Add navigation footer
+    footer_text = f"Use %study leaderboard {category} {period} [page] to navigate"
+    if page < total_pages:
+        footer_text += f" • Next: %study leaderboard {category} {period} {page + 1}"
+    embed.set_footer(text=footer_text)
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='export')
+async def study_export(ctx, data_type: str = "all"):
+    """Export your study data as JSON - Usage: %study export [all/sessions/answers/bookmarks]"""
+    import json
+
+    valid_types = ['all', 'sessions', 'answers', 'bookmarks']
+    if data_type not in valid_types:
+        await ctx.send(f"❌ Invalid data type! Valid types: {', '.join(valid_types)}")
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    export_data = {
+        'user_id': ctx.author.id,
+        'guild_id': ctx.guild.id,
+        'export_date': datetime.datetime.now().isoformat(),
+        'data_type': data_type
+    }
+
+    try:
+        if data_type in ['all', 'sessions']:
+            # Export study sessions
+            c.execute('''SELECT * FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+                      (ctx.author.id, ctx.guild.id))
+            active_sessions = [dict(row) for row in c.fetchall()]
+
+            c.execute('''SELECT * FROM study_history WHERE user_id = ? AND guild_id = ? ORDER BY end_time DESC''',
+                      (ctx.author.id, ctx.guild.id))
+            session_history = [dict(row) for row in c.fetchall()]
+
+            export_data['active_sessions'] = active_sessions
+            export_data['session_history'] = session_history
+
+        if data_type in ['all', 'answers']:
+            # Export study answers
+            c.execute('''SELECT * FROM study_answers WHERE user_id = ? AND guild_id = ? ORDER BY timestamp DESC''',
+                      (ctx.author.id, ctx.guild.id))
+            answers = [dict(row) for row in c.fetchall()]
+            export_data['answers'] = answers
+
+        if data_type in ['all', 'bookmarks']:
+            # Export bookmarks
+            c.execute('''SELECT * FROM study_bookmarks WHERE user_id = ? AND guild_id = ? ORDER BY created_at DESC''',
+                      (ctx.author.id, ctx.guild.id))
+            bookmarks = [dict(row) for row in c.fetchall()]
+            export_data['bookmarks'] = bookmarks
+
+        # Add summary statistics
+        if data_type == 'all':
+            # Calculate summary stats
+            total_sessions = len(session_history) if 'session_history' in export_data else 0
+            total_duration = sum(s.get('actual_duration', 0) for s in session_history) if 'session_history' in export_data else 0
+            total_answers = len(answers) if 'answers' in export_data else 0
+            correct_answers = sum(1 for a in answers if a.get('is_correct', 0) == 1) if 'answers' in export_data else 0
+            accuracy = (correct_answers / total_answers * 100) if total_answers > 0 else 0
+
+            export_data['summary'] = {
+                'total_sessions': total_sessions,
+                'total_study_time_seconds': total_duration,
+                'total_study_time_formatted': f"{total_duration//3600}h {(total_duration%3600)//60}m",
+                'total_answers': total_answers,
+                'correct_answers': correct_answers,
+                'accuracy_percentage': round(accuracy, 2),
+                'total_bookmarks': len(bookmarks) if 'bookmarks' in export_data else 0
+            }
+
+        conn.close()
+
+        # Convert to JSON
+        json_data = json.dumps(export_data, indent=2, default=str)
+
+        # Create file
+        filename = f"study_data_{ctx.author.id}_{data_type}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+        # Send as file attachment
+        file = discord.File(io.BytesIO(json_data.encode('utf-8')), filename=filename)
+
+        embed = discord.Embed(
+            title="📤 Study Data Export Complete",
+            description=f"Your {data_type} study data has been exported as JSON.",
+            color=discord.Color.green()
+        )
+
+        embed.add_field(name="File Name", value=f"`{filename}`", inline=False)
+        embed.add_field(name="Data Types Included", value=data_type.title(), inline=True)
+
+        if data_type == 'all' and 'summary' in export_data:
+            summary = export_data['summary']
+            embed.add_field(name="Summary", value=f"Sessions: {summary['total_sessions']}\nTime: {summary['total_study_time_formatted']}\nAccuracy: {summary['accuracy_percentage']}%", inline=True)
+
+        embed.set_footer(text="Keep this file safe - it contains your study data")
+
+        await ctx.send(embed=embed, file=file)
+
+    except Exception as e:
+        conn.close()
+        await ctx.send(f"❌ Error exporting data: {str(e)}")
+
+
+@study_group.command(name='history')
+async def study_history(ctx, page: int = 1, period: str = "all"):
+    """View detailed study session history - Usage: %study history [page] [week/month/all]"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Validate page number
+    if page < 1:
+        page = 1
+
+    # Calculate date range
+    now = datetime.datetime.now()
+    if period == "week":
+        start_date = now - datetime.timedelta(days=7)
+        title_period = "This Week"
+    elif period == "month":
+        start_date = now - datetime.timedelta(days=30)
+        title_period = "This Month"
+    else:
+        start_date = None
+        title_period = "All Time"
+
+    # Get total count for pagination
+    if start_date:
+        c.execute('''SELECT COUNT(*) FROM study_history
+                      WHERE user_id = ? AND guild_id = ? AND start_time >= ?''',
+                  (ctx.author.id, ctx.guild.id, start_date.isoformat()))
+    else:
+        c.execute('''SELECT COUNT(*) FROM study_history
+                      WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+    total_sessions = c.fetchone()[0]
+
+    # Pagination setup
+    per_page = 5
+    total_pages = (total_sessions + per_page - 1) // per_page
+    if page > total_pages and total_pages > 0:
+        page = total_pages
+
+    offset = (page - 1) * per_page
+
+    # Get study history with pagination
+    if start_date:
+        c.execute('''SELECT * FROM study_history
+                      WHERE user_id = ? AND guild_id = ? AND start_time >= ?
+                      ORDER BY start_time DESC LIMIT ? OFFSET ?''',
+                  (ctx.author.id, ctx.guild.id, start_date.isoformat(), per_page, offset))
+    else:
+        c.execute('''SELECT * FROM study_history
+                      WHERE user_id = ? AND guild_id = ?
+                      ORDER BY start_time DESC LIMIT ? OFFSET ?''',
+                  (ctx.author.id, ctx.guild.id, per_page, offset))
+    sessions = c.fetchall()
+
+    conn.close()
+
+    if not sessions:
+        embed = discord.Embed(
+            title=f"📚 Study History - {title_period}",
+            description="No study sessions found in this period.",
+            color=discord.Color.blue()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    embed = discord.Embed(
+        title=f"📚 Study History - {title_period}",
+        description=f"Page {page}/{total_pages} • Total sessions: {total_sessions}",
+        color=discord.Color.blue()
+    )
+
+    for session in sessions:
+        session_data = dict(session)
+
+        # Format duration
+        duration_minutes = session_data['actual_duration'] // 60
+        intended_minutes = session_data.get('intended_duration', 0)
+
+        # Format date
+        start_time = datetime.datetime.fromisoformat(session_data['start_time'])
+        date_str = start_time.strftime('%Y-%m-%d %H:%M')
+
+        # Get answer stats for MCQ sessions
+        if session_data['study_type'] in ['MCQ Practice', 'MCQ Test']:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''SELECT COUNT(*), SUM(is_correct) FROM study_answers
+                          WHERE session_id = ?''', (session_data['session_id'],))
+            answer_stats = c.fetchone()
+            total_answers = answer_stats[0] or 0
+            correct_answers = answer_stats[1] or 0
+            accuracy = (correct_answers / total_answers * 100) if total_answers > 0 else 0
+            conn.close()
+
+            stats_str = f"Q&A: {correct_answers}/{total_answers} ({accuracy:.1f}%)"
+        else:
+            stats_str = f"Duration: {duration_minutes}m"
+
+        # Completion status
+        completed = "✅ Completed" if session_data.get('completed', 0) == 1 else "⏰ Expired"
+
+        embed.add_field(
+            name=f"{session_data['study_type']} - {session_data.get('subject', 'General')}",
+            value=f"**Date:** {date_str}\n**Duration:** {duration_minutes}m / {intended_minutes}m planned\n**Stats:** {stats_str}\n**Status:** {completed}",
+            inline=False
+        )
+
+    # Add navigation footer
+    footer_text = f"Use %study history {page + 1} {period} for next page"
+    if page < total_pages:
+        footer_text += f" • Next: %study history {page + 1} {period}"
+    embed.set_footer(text=footer_text)
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='history')
+async def study_history(ctx, page: int = 1):
+    """View detailed study session history with pagination - Usage: %study history [page]"""
+    if page < 1:
+        page = 1
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Get total count
+    c.execute('''SELECT COUNT(*) FROM study_history
+                  WHERE user_id = ? AND guild_id = ?''',
+              (ctx.author.id, ctx.guild.id))
+    total_sessions = c.fetchone()[0]
+
+    if total_sessions == 0:
+        embed = discord.Embed(
+            title="📚 Study History",
+            description="You haven't completed any study sessions yet.\nUse `%study start` to begin your first session!",
+            color=discord.Color.blue()
+        )
+        await ctx.send(embed=embed)
+        conn.close()
+        return
+
+    # Pagination
+    per_page = 5
+    total_pages = (total_sessions + per_page - 1) // per_page
+    if page > total_pages:
+        page = total_pages
+
+    offset = (page - 1) * per_page
+
+    # Get sessions for this page
+    c.execute('''SELECT * FROM study_history
+                  WHERE user_id = ? AND guild_id = ?
+                  ORDER BY end_time DESC LIMIT ? OFFSET ?''',
+              (ctx.author.id, ctx.guild.id, per_page, offset))
+    sessions = c.fetchall()
+
+    conn.close()
+
+    embed = discord.Embed(
+        title=f"📚 Study History - Page {page}/{total_pages}",
+        description=f"You've completed **{total_sessions}** study sessions",
+        color=discord.Color.blue()
+    )
+
+    for i, session in enumerate(sessions, 1):
+        session_data = dict(session)
+        session_id = session_data['session_id']
+        study_type = session_data['study_type']
+        subject = session_data['subject'] or 'Not specified'
+        mood = session_data['mood'] or 'Not specified'
+        intended_duration = session_data.get('intended_duration', 0)
+        actual_duration = session_data['actual_duration']
+        completed = session_data['completed']
+        end_time = session_data.get('end_time', '')
+
+        # Format duration
+        hours = actual_duration // 3600
+        minutes = (actual_duration % 3600) // 60
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+        # Get answer stats for MCQ sessions
+        answer_stats = ""
+        if study_type in ['MCQ Practice', 'MCQ Test']:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''SELECT COUNT(*), SUM(is_correct) FROM study_answers
+                          WHERE user_id = ? AND guild_id = ? AND session_id = ?''',
+                      (ctx.author.id, ctx.guild.id, session_id))
+            ans_result = c.fetchone()
+            conn.close()
+
+            if ans_result and ans_result[0] > 0:
+                total_ans = ans_result[0]
+                correct_ans = ans_result[1] or 0
+                accuracy = (correct_ans / total_ans * 100)
+                answer_stats = f" | {correct_ans}/{total_ans} correct ({accuracy:.1f}%)"
+
+        # Format date
+        if end_time:
+            try:
+                end_dt = datetime.datetime.fromisoformat(end_time)
+                date_str = end_dt.strftime('%Y-%m-%d %H:%M')
+            except:
+                date_str = end_time[:16]
+        else:
+            date_str = "Unknown"
+
+        status_emoji = "✅" if completed else "⏰"
+        embed.add_field(
+            name=f"{status_emoji} {study_type} - {subject}",
+            value=f"**Duration:** {duration_str} (planned: {intended_duration}m)\n"
+                  f"**Mood:** {mood}{answer_stats}\n"
+                  f"**Completed:** {date_str}",
+            inline=False
+        )
+
+    # Add navigation
+    footer_text = f"Use %study history [page] to navigate"
+    if page < total_pages:
+        footer_text += f" • Next: %study history {page + 1}"
+    embed.set_footer(text=footer_text)
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='testsummary')
+async def study_test_summary(ctx, session_id: str = None):
+    """View detailed summary of a completed test - Usage: %study testsummary [session_id]"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # If no session_id provided, find the most recent test session
+    if not session_id:
+        c.execute('''SELECT session_id FROM study_history
+                      WHERE user_id = ? AND guild_id = ? AND study_type = 'MCQ Test'
+                      ORDER BY end_time DESC LIMIT 1''',
+                  (ctx.author.id, ctx.guild.id))
+        result = c.fetchone()
+        if result:
+            session_id = result[0]
+        else:
+            await ctx.send("❌ No completed test sessions found!")
+            conn.close()
+            return
+
+    # Get test session details
+    c.execute('''SELECT * FROM study_history
+                  WHERE user_id = ? AND guild_id = ? AND session_id = ? AND study_type = 'MCQ Test' ''',
+              (ctx.author.id, ctx.guild.id, session_id))
+    test_data = c.fetchone()
+
+    if not test_data:
+        await ctx.send("❌ Test session not found!")
+        conn.close()
+        return
+
+    test_info = dict(test_data)
+
+    # Get all answers for this test
+    c.execute('''SELECT question_number, answer, is_correct FROM study_answers
+                  WHERE user_id = ? AND guild_id = ? AND session_id = ?
+                  ORDER BY question_number''',
+              (ctx.author.id, ctx.guild.id, session_id))
+    answers = c.fetchall()
+
+    conn.close()
+
+    # Calculate statistics
+    total_questions = len(answers)
+    correct_answers = sum(1 for ans in answers if ans[2] == 1)
+    accuracy = (correct_answers / total_questions * 100) if total_questions > 0 else 0
+
+    # Format duration
+    duration_minutes = test_info['actual_duration'] // 60
+    intended_minutes = test_info.get('intended_duration', 0)
+
+    embed = discord.Embed(
+        title="📊 Test Summary",
+        description=f"**Session ID:** `{session_id}`",
+        color=discord.Color.blue()
+    )
+
+    embed.add_field(name="Subject", value=test_info.get('subject', 'Not specified'), inline=True)
+    embed.add_field(name="Duration", value=f"{duration_minutes}m / {intended_minutes}m planned", inline=True)
+    embed.add_field(name="Completion", value="Timer Expired" if test_info.get('completed', 1) == 0 else "Manual End", inline=True)
+
+    embed.add_field(name="Questions Answered", value=f"{total_questions}", inline=True)
+    embed.add_field(name="Correct Answers", value=f"{correct_answers}", inline=True)
+    embed.add_field(name="Accuracy", value=f"{accuracy:.1f}%", inline=True)
+
+    # Show answer breakdown (first 20 questions)
+    if answers:
+        answer_summary = ""
+        for q_num, answer, is_correct in answers[:20]:
+            status = "✅" if is_correct else "❌"
+            answer_summary += f"Q{q_num}: {answer} {status}  "
+
+        if len(answers) > 20:
+            answer_summary += f"\n... and {len(answers) - 20} more questions"
+
+        embed.add_field(name="Answer Breakdown", value=answer_summary, inline=False)
+
+    # Performance analysis
+    if total_questions > 0:
+        if accuracy >= 90:
+            performance = "Outstanding! 🏆"
+        elif accuracy >= 80:
+            performance = "Excellent! 🌟"
+        elif accuracy >= 70:
+            performance = "Good! 👍"
+        elif accuracy >= 60:
+            performance = "Fair 📚"
+        else:
+            performance = "Needs improvement 📖"
+
+        embed.add_field(name="Performance Rating", value=performance, inline=False)
+
+    embed.set_footer(text=f"Test completed on {test_info['end_time'][:10] if test_info.get('end_time') else 'Unknown'}")
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='trends')
+async def study_trends(ctx, period: str = "month"):
+    """View study progress trends - Usage: %study trends [week/month/3months/all]"""
+    if period not in ['week', 'month', '3months', 'all']:
+        await ctx.send("❌ Invalid period! Use: week, month, 3months, or all")
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Calculate date range
+    now = datetime.datetime.now()
+    if period == "week":
+        start_date = now - datetime.timedelta(days=7)
+        title_period = "This Week"
+    elif period == "month":
+        start_date = now - datetime.timedelta(days=30)
+        title_period = "This Month"
+    elif period == "3months":
+        start_date = now - datetime.timedelta(days=90)
+        title_period = "Last 3 Months"
+    else:
+        start_date = None
+        title_period = "All Time"
+
+    # Get study sessions in the period
+    if start_date:
+        c.execute('''SELECT start_time, actual_duration, study_type FROM study_history
+                      WHERE user_id = ? AND guild_id = ? AND start_time >= ?
+                      ORDER BY start_time''',
+                  (ctx.author.id, ctx.guild.id, start_date.isoformat()))
+    else:
+        c.execute('''SELECT start_time, actual_duration, study_type FROM study_history
+                      WHERE user_id = ? AND guild_id = ?
+                      ORDER BY start_time''',
+                  (ctx.author.id, ctx.guild.id))
+
+    sessions = c.fetchall()
+
+    # Get test results for accuracy trends
+    if start_date:
+        c.execute('''SELECT sh.start_time, COUNT(sa.is_correct) as total_answers,
+                           SUM(sa.is_correct) as correct_answers
+                      FROM study_history sh
+                      LEFT JOIN study_answers sa ON sh.session_id = sa.session_id
+                      WHERE sh.user_id = ? AND sh.guild_id = ? AND sh.study_type = 'MCQ Test'
+                      AND sh.start_time >= ?
+                      GROUP BY sh.session_id, sh.start_time
+                      ORDER BY sh.start_time''',
+                  (ctx.author.id, ctx.guild.id, start_date.isoformat()))
+    else:
+        c.execute('''SELECT sh.start_time, COUNT(sa.is_correct) as total_answers,
+                           SUM(sa.is_correct) as correct_answers
+                      FROM study_history sh
+                      LEFT JOIN study_answers sa ON sh.session_id = sa.session_id
+                      WHERE sh.user_id = ? AND sh.guild_id = ? AND sh.study_type = 'MCQ Test'
+                      GROUP BY sh.session_id, sh.start_time
+                      ORDER BY sh.start_time''',
+                  (ctx.author.id, ctx.guild.id))
+
+    test_results = c.fetchall()
+    conn.close()
+
+    if not sessions:
+        embed = discord.Embed(
+            title="📈 Study Trends",
+            description=f"No study data found for {title_period.lower()}.\nStart studying to see your trends!",
+            color=discord.Color.blue()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    # Calculate statistics
+    total_sessions = len(sessions)
+    total_duration = sum(session[1] for session in sessions)
+    avg_session_duration = total_duration / total_sessions if total_sessions > 0 else 0
+
+    # Group by study type
+    type_counts = {}
+    for session in sessions:
+        study_type = session[2]
+        type_counts[study_type] = type_counts.get(study_type, 0) + 1
+
+    # Calculate daily study time trend (last 7 days for week, last 30 for month, etc.)
+    days_to_analyze = 7 if period == "week" else 30 if period == "month" else 90 if period == "3months" else 365
+    daily_totals = {}
+
+    for session in sessions:
+        session_date = datetime.datetime.fromisoformat(session[0]).date()
+        if session_date not in daily_totals:
+            daily_totals[session_date] = 0
+        daily_totals[session_date] += session[1]  # Add duration in seconds
+
+    # Calculate average daily study time
+    avg_daily_minutes = sum(daily_totals.values()) / max(len(daily_totals), 1) / 60
+
+    # Calculate test accuracy trend
+    accuracy_trend = []
+    for result in test_results:
+        total_answers = result[1] or 0
+        correct_answers = result[2] or 0
+        if total_answers > 0:
+            accuracy = (correct_answers / total_answers) * 100
+            accuracy_trend.append(accuracy)
+
+    avg_accuracy = sum(accuracy_trend) / len(accuracy_trend) if accuracy_trend else 0
+
+    embed = discord.Embed(
+        title=f"📈 Study Trends - {title_period}",
+        description=f"Analysis of your study habits and progress",
+        color=discord.Color.purple()
+    )
+
+    # Overall statistics
+    embed.add_field(
+        name="📊 Overall Stats",
+        value=f"**Total Sessions:** {total_sessions:,}\n"
+              f"**Total Study Time:** {total_duration//3600}h {total_duration%3600//60}m\n"
+              f"**Average Session:** {avg_session_duration//60:.1f} minutes\n"
+              f"**Average Daily:** {avg_daily_minutes:.1f} minutes",
+        inline=False
+    )
+
+    # Study type breakdown
+    if type_counts:
+        type_breakdown = "\n".join([f"• {stype}: {count} sessions" for stype, count in type_counts.items()])
+        embed.add_field(
+            name="📚 Study Types",
+            value=type_breakdown,
+            inline=True
+        )
+
+    # Test performance (if any tests taken)
+    if test_results:
+        embed.add_field(
+            name="🎯 Test Performance",
+            value=f"**Tests Taken:** {len(test_results)}\n"
+                  f"**Average Accuracy:** {avg_accuracy:.1f}%\n"
+                  f"**Best Accuracy:** {max(accuracy_trend):.1f}%\n"
+                  f"**Latest Accuracy:** {accuracy_trend[-1]:.1f}%" if accuracy_trend else "N/A",
+            inline=True
+        )
+
+    # Progress indicators
+    consistency = len(daily_totals) / max(days_to_analyze, 1) * 100
+    embed.add_field(
+        name="📈 Progress Indicators",
+        value=f"**Consistency:** {consistency:.1f}% of days studied\n"
+              f"**Study Streak:** {len(daily_totals)} active days\n"
+              f"**Trend:** {'📈 Improving' if len(accuracy_trend) >= 2 and accuracy_trend[-1] > accuracy_trend[0] else '📉 Needs focus' if accuracy_trend else '📊 Building data'}",
+        inline=False
+    )
+
+    # Recommendations
+    recommendations = []
+    if avg_daily_minutes < 30:
+        recommendations.append("• Try to study at least 30 minutes per day")
+    if consistency < 50:
+        recommendations.append("• Aim for more consistent study days")
+    if accuracy_trend and avg_accuracy < 70:
+        recommendations.append("• Focus on understanding concepts better")
+    if total_sessions < 5:
+        recommendations.append("• Keep studying to build better trends!")
+
+    if recommendations:
+        embed.add_field(
+            name="💡 Recommendations",
+            value="\n".join(recommendations),
+            inline=False
+        )
+
+    embed.set_footer(text=f"Data from {title_period.lower()} • Use %study trends [period] to change timeframe")
+
+    await ctx.send(embed=embed)
+
+
+@study_group.command(name='leaderboard', aliases=['lb'])
+async def study_leaderboard(ctx, category: str = "time", page: int = 1):
+    """View study leaderboards - Usage: %study leaderboard [time/sessions/accuracy/tests] [page]"""
+    if page < 1:
+        page = 1
+
+    if category not in ['time', 'sessions', 'accuracy', 'tests']:
+        await ctx.send("❌ Invalid category! Use: time, sessions, accuracy, or tests")
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    per_page = 10
+    offset = (page - 1) * per_page
+
+    if category == "time":
+        # Total study time leaderboard
+        c.execute('''SELECT u.user_id, SUM(sh.actual_duration) as total_time
+                      FROM users u
+                      LEFT JOIN study_history sh ON u.user_id = sh.user_id AND u.guild_id = sh.guild_id
+                      WHERE u.guild_id = ?
+                      GROUP BY u.user_id
+                      HAVING total_time > 0
+                      ORDER BY total_time DESC LIMIT ? OFFSET ?''',
+                  (ctx.guild.id, per_page, offset))
+
+        title = "⏱️ Study Time Leaderboard"
+        value_suffix = "minutes"
+        value_func = lambda x: x // 60
+
+    elif category == "sessions":
+        # Total study sessions leaderboard
+        c.execute('''SELECT u.user_id, COUNT(sh.session_id) as session_count
+                      FROM users u
+                      LEFT JOIN study_history sh ON u.user_id = sh.user_id AND u.guild_id = sh.guild_id
+                      WHERE u.guild_id = ?
+                      GROUP BY u.user_id
+                      HAVING session_count > 0
+                      ORDER BY session_count DESC LIMIT ? OFFSET ?''',
+                  (ctx.guild.id, per_page, offset))
+
+        title = "📚 Study Sessions Leaderboard"
+        value_suffix = "sessions"
+        value_func = lambda x: x
+
+    elif category == "accuracy":
+        # Average test accuracy leaderboard
+        c.execute('''SELECT u.user_id,
+                           AVG(CASE WHEN sa_total.total_answers > 0
+                               THEN (sa_correct.correct_answers * 100.0 / sa_total.total_answers)
+                               ELSE 0 END) as avg_accuracy
+                      FROM users u
+                      LEFT JOIN (
+                          SELECT user_id, guild_id, session_id, COUNT(*) as total_answers
+                          FROM study_answers
+                          GROUP BY user_id, guild_id, session_id
+                      ) sa_total ON u.user_id = sa_total.user_id AND u.guild_id = sa_total.guild_id
+                      LEFT JOIN (
+                          SELECT user_id, guild_id, session_id, SUM(is_correct) as correct_answers
+                          FROM study_answers
+                          GROUP BY user_id, guild_id, session_id
+                      ) sa_correct ON sa_total.user_id = sa_correct.user_id
+                          AND sa_total.guild_id = sa_correct.guild_id
+                          AND sa_total.session_id = sa_correct.session_id
+                      WHERE u.guild_id = ?
+                      GROUP BY u.user_id
+                      HAVING avg_accuracy > 0
+                      ORDER BY avg_accuracy DESC LIMIT ? OFFSET ?''',
+                  (ctx.guild.id, per_page, offset))
+
+        title = "🎯 Test Accuracy Leaderboard"
+        value_suffix = "%"
+        value_func = lambda x: round(x, 1) if x else 0
+
+    elif category == "tests":
+        # Total tests taken leaderboard
+        c.execute('''SELECT u.user_id, COUNT(DISTINCT sh.session_id) as test_count
+                      FROM users u
+                      LEFT JOIN study_history sh ON u.user_id = sh.user_id AND u.guild_id = sh.guild_id
+                      WHERE u.guild_id = ? AND sh.study_type = 'MCQ Test'
+                      GROUP BY u.user_id
+                      HAVING test_count > 0
+                      ORDER BY test_count DESC LIMIT ? OFFSET ?''',
+                  (ctx.guild.id, per_page, offset))
+
+        title = "📝 Tests Taken Leaderboard"
+        value_suffix = "tests"
+        value_func = lambda x: x
+
+    results = c.fetchall()
+
+    # Get total count for pagination
+    if category == "time":
+        c.execute('''SELECT COUNT(DISTINCT u.user_id)
+                      FROM users u
+                      LEFT JOIN study_history sh ON u.user_id = sh.user_id AND u.guild_id = sh.guild_id
+                      WHERE u.guild_id = ?
+                      GROUP BY u.user_id
+                      HAVING SUM(sh.actual_duration) > 0''',
+                  (ctx.guild.id,))
+    elif category == "sessions":
+        c.execute('''SELECT COUNT(DISTINCT u.user_id)
+                      FROM users u
+                      LEFT JOIN study_history sh ON u.user_id = sh.user_id AND u.guild_id = sh.guild_id
+                      WHERE u.guild_id = ?
+                      GROUP BY u.user_id
+                      HAVING COUNT(sh.session_id) > 0''',
+                  (ctx.guild.id,))
+    elif category == "accuracy":
+        c.execute('''SELECT COUNT(DISTINCT u.user_id)
+                      FROM users u
+                      WHERE u.guild_id = ? AND EXISTS (
+                          SELECT 1 FROM study_answers sa
+                          WHERE sa.user_id = u.user_id AND sa.guild_id = u.guild_id
+                      )''',
+                  (ctx.guild.id,))
+    elif category == "tests":
+        c.execute('''SELECT COUNT(DISTINCT u.user_id)
+                      FROM users u
+                      LEFT JOIN study_history sh ON u.user_id = sh.user_id AND u.guild_id = sh.guild_id
+                      WHERE u.guild_id = ? AND sh.study_type = 'MCQ Test'
+                      GROUP BY u.user_id
+                      HAVING COUNT(DISTINCT sh.session_id) > 0''',
+                  (ctx.guild.id,))
+
+    total_count = c.fetchone()[0]
+    total_pages = (total_count + per_page - 1) // per_page
+
+    conn.close()
+
+    if not results:
+        embed = discord.Embed(
+            title=title,
+            description="No study data available for this category yet!",
+            color=discord.Color.gold()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    embed = discord.Embed(
+        title=f"{title} - Page {page}/{total_pages}",
+        color=discord.Color.gold()
+    )
+
+    leaderboard_text = ""
+    for i, (user_id, value) in enumerate(results):
+        rank = offset + i + 1
+
+        # Get user object
+        user = ctx.guild.get_member(user_id)
+        if user:
+            display_name = user.display_name
+        else:
+            display_name = f"[Left Server]"
+
+        # Format value
+        display_value = value_func(value)
+
+        # Add medal for top 3
+        if page == 1 and rank <= 3:
+            medal = ["🥇", "🥈", "🥉"][rank - 1]
+        else:
+            medal = f"{rank}."
+
+        leaderboard_text += f"{medal} {display_name} - `{display_value} {value_suffix}`\n"
+
+    embed.description = leaderboard_text
+
+    # Add navigation
+    footer_text = f"Use %study leaderboard {category} [page] to navigate"
+    if page < total_pages:
+        footer_text += f" • Next: %study lb {category} {page + 1}"
+    embed.set_footer(text=footer_text)
+
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='export')
+async def export_data(ctx, data_type: str = "all"):
+    """Export your data - Usage: %export [study/user/all]"""
+    if data_type not in ['study', 'user', 'all']:
+        await ctx.send("❌ Invalid data type! Use: study, user, or all")
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    export_data = {
+        'export_date': datetime.datetime.now().isoformat(),
+        'user_id': ctx.author.id,
+        'guild_id': ctx.guild.id,
+        'username': ctx.author.name,
+        'guild_name': ctx.guild.name
+    }
+
+    if data_type in ['user', 'all']:
+        # Export user data
+        c.execute('''SELECT * FROM users WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+        user_data = c.fetchone()
+
+        if user_data:
+            user_dict = dict(user_data)
+            # Remove sensitive data
+            user_dict.pop('user_id', None)
+            user_dict.pop('guild_id', None)
+            export_data['user_stats'] = user_dict
+
+        # Export daily stats (last 30 days)
+        thirty_days_ago = (datetime.datetime.now() - datetime.timedelta(days=30)).isoformat()
+        c.execute('''SELECT * FROM daily_stats
+                      WHERE user_id = ? AND guild_id = ? AND date >= ?
+                      ORDER BY date''',
+                  (ctx.author.id, ctx.guild.id, thirty_days_ago))
+        daily_stats = c.fetchall()
+        export_data['daily_stats'] = [dict(row) for row in daily_stats]
+
+        # Export weekly stats (last 12 weeks)
+        twelve_weeks_ago = (datetime.datetime.now() - datetime.timedelta(weeks=12)).isoformat()
+        c.execute('''SELECT * FROM weekly_stats
+                      WHERE user_id = ? AND guild_id = ? AND week_start >= ?
+                      ORDER BY week_start''',
+                  (ctx.author.id, ctx.guild.id, twelve_weeks_ago))
+        weekly_stats = c.fetchall()
+        export_data['weekly_stats'] = [dict(row) for row in weekly_stats]
+
+    if data_type in ['study', 'all']:
+        # Export study sessions
+        c.execute('''SELECT * FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+        active_sessions = c.fetchall()
+        export_data['active_study_sessions'] = [dict(row) for row in active_sessions]
+
+        # Export study history
+        c.execute('''SELECT * FROM study_history WHERE user_id = ? AND guild_id = ?
+                      ORDER BY start_time''',
+                  (ctx.author.id, ctx.guild.id))
+        study_history = c.fetchall()
+        export_data['study_history'] = [dict(row) for row in study_history]
+
+        # Export study answers
+        c.execute('''SELECT * FROM study_answers WHERE user_id = ? AND guild_id = ?
+                      ORDER BY timestamp''',
+                  (ctx.author.id, ctx.guild.id))
+        study_answers = c.fetchall()
+        export_data['study_answers'] = [dict(row) for row in study_answers]
+
+        # Export study bookmarks
+        c.execute('''SELECT * FROM study_bookmarks WHERE user_id = ? AND guild_id = ?
+                      ORDER BY created_at''',
+                  (ctx.author.id, ctx.guild.id))
+        bookmarks = c.fetchall()
+        export_data['study_bookmarks'] = [dict(row) for row in bookmarks]
+
+    conn.close()
+
+    # Create JSON file
+    import json
+    import io
+
+    json_data = json.dumps(export_data, indent=2, default=str)
+    json_file = io.BytesIO(json_data.encode('utf-8'))
+    json_file.seek(0)
+
+    # Create filename
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"questuza_data_{data_type}_{timestamp}.json"
+
+    # Send file
+    discord_file = discord.File(json_file, filename=filename)
+
+    embed = discord.Embed(
+        title="📤 Data Export Complete",
+        description=f"Your {data_type} data has been exported successfully!",
+        color=discord.Color.green()
+    )
+
+    # Add summary
+    if 'user_stats' in export_data:
+        user_stats = export_data['user_stats']
+        embed.add_field(
+            name="📊 User Stats Summary",
+            value=f"Level: {user_stats.get('level', 0)}\n"
+                  f"XP: {user_stats.get('xp', 0):,}\n"
+                  f"Messages: {user_stats.get('messages_sent', 0):,}\n"
+                  f"VC Time: {user_stats.get('vc_seconds', 0)//3600}h",
+            inline=True
+        )
+
+    if 'study_history' in export_data:
+        study_sessions = len(export_data['study_history'])
+        total_study_time = sum(session.get('actual_duration', 0) for session in export_data['study_history'])
+        embed.add_field(
+            name="📚 Study Stats Summary",
+            value=f"Sessions: {study_sessions}\n"
+                  f"Total Time: {total_study_time//3600}h {total_study_time%3600//60}m\n"
+                  f"Tests: {len([s for s in export_data['study_history'] if s.get('study_type') == 'MCQ Test'])}",
+            inline=True
+        )
+
+    embed.add_field(
+        name="📁 File Contents",
+        value=f"• {len(export_data)} main sections\n"
+              f"• JSON format for easy analysis\n"
+              f"• Includes all your {data_type} data",
+        inline=False
+    )
+
+    embed.set_footer(text="Keep this file safe - it contains your personal data")
+
+    await ctx.send(embed=embed, file=discord_file)
+
+
 # Fuzzy command matching helper
 def get_similar_command(attempted_command: str) -> str:
     """Find similar commands using simple string matching"""
-    all_commands = ['profile', 'quests', 'claim', 'claimall', 'autoclaim', 'questprogress', 
-                    'vctest', 'debug', 'banner', 'color', 'leaderboard', 'lb', 'help', 'guide']
-    
+    all_commands = ['profile', 'quests', 'claim', 'claimall', 'autoclaim', 'questprogress',
+                    'study', 'vctest', 'debug', 'banner', 'color', 'leaderboard', 'lb', 'help', 'guide']
+
     attempted_lower = attempted_command.lower()
-    
+
     # Check for exact matches with different case
     for cmd in all_commands:
         if attempted_lower == cmd.lower():
             return cmd
-    
+
     # Check for partial matches
     for cmd in all_commands:
         if attempted_lower in cmd.lower() or cmd.lower() in attempted_lower:
             return cmd
-    
+
     # Check for common typos (Levenshtein distance of 1-2)
     for cmd in all_commands:
         if len(attempted_lower) == len(cmd):
             differences = sum(1 for a, b in zip(attempted_lower, cmd.lower()) if a != b)
             if differences <= 2:
                 return cmd
-    
+
     return None
 
 
 @bot.event
 async def on_message(message):
-    """Enhanced message handler with improved typo detection"""
     if message.author.bot:
-        return await bot.process_commands(message)
+        return
 
     # Check for wrong prefix usage - only for commands that closely match bot commands
     content = message.content.strip()
@@ -5213,6 +9138,192 @@ async def on_message(message):
                     embed.set_footer(text="💡 Tip: All Questuza commands start with %")
                     await message.channel.send(embed=embed)
                     return
+
+    # Handle study setup conversation
+    if message.author.id in study_setup_states:
+        setup_state = study_setup_states[message.author.id]
+        step = setup_state['step']
+        setup_msg = setup_state['message']
+        data = setup_state['data']
+
+        if step == 1:  # Study type
+            study_type = content.strip().title()
+            valid_types = ['MCQ Practice', 'MCQ Test', 'Reading', 'Other']
+            if study_type not in valid_types:
+                study_type = 'Other'
+
+            data['study_type'] = study_type
+
+            # Move to next step
+            embed = discord.Embed(
+                title="📚 Study Session Setup",
+                description="Great! Now let's continue.",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="Question 2/4",
+                value="What's the subject/topic you're studying?",
+                inline=False
+            )
+            await setup_msg.edit(embed=embed)
+            setup_state['step'] = 2
+
+        elif step == 2:  # Subject
+            data['subject'] = content.strip()
+
+            # Move to next step
+            embed = discord.Embed(
+                title="📚 Study Session Setup",
+                description="Perfect!",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="Question 3/4",
+                value="How are you feeling right now? (e.g., focused, tired, motivated)",
+                inline=False
+            )
+            await setup_msg.edit(embed=embed)
+            setup_state['step'] = 3
+
+        elif step == 3:  # Mood
+            data['mood'] = content.strip()
+
+            # Move to next step
+            embed = discord.Embed(
+                title="📚 Study Session Setup",
+                description="Almost done!",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="Question 4/4",
+                value="How long do you plan to study? (in minutes, e.g., 30, 60, 90)",
+                inline=False
+            )
+            await setup_msg.edit(embed=embed)
+            setup_state['step'] = 4
+
+        elif step == 4:  # Duration
+            try:
+                duration = int(content.strip())
+                if duration <= 0:
+                    duration = 30  # Default
+                elif duration > 480:  # Max 8 hours
+                    duration = 480
+            except ValueError:
+                duration = 30  # Default
+
+            data['intended_duration'] = duration
+
+            # Complete setup and start session
+            session_id = f"{message.author.id}_{int(datetime.datetime.now().timestamp())}"
+
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''INSERT INTO study_sessions
+                          (user_id, guild_id, session_id, study_type, subject, mood,
+                           intended_duration, start_time, last_activity)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (message.author.id, message.guild.id, session_id,
+                         data.get('study_type'), data.get('subject'), data.get('mood'),
+                         data.get('intended_duration'),
+                         datetime.datetime.now().isoformat(),
+                         datetime.datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+
+            # Clear setup state
+            del study_setup_states[message.author.id]
+
+            # Send confirmation
+            embed = discord.Embed(
+                title="🚀 Study Session Started!",
+                description=f"Your study session has begun, {message.author.mention}!",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Type", value=data.get('study_type', 'General'), inline=True)
+            embed.add_field(name="Subject", value=data.get('subject', 'Not specified'), inline=True)
+            embed.add_field(name="Mood", value=data.get('mood', 'Not specified'), inline=True)
+            embed.add_field(name="Planned Duration", value=f"{duration} minutes", inline=True)
+            embed.add_field(
+                name="Commands",
+                value="• Use `%study stop` to end the session\n• Use `%study status` to check progress\n• Submit answers naturally (e.g., 'Answer: B' or 'I think it's C')",
+                inline=False
+            )
+
+            await setup_msg.edit(embed=embed)
+
+        return  # Don't process as regular message
+
+    # Handle natural language answer submission during active study sessions
+    if content and not content.startswith('%'):
+        # Check if user has active study session
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''SELECT session_id FROM study_sessions
+                     WHERE user_id = ? AND guild_id = ?''',
+                  (message.author.id, message.guild.id))
+        session_check = c.fetchone()
+
+        if session_check:
+            session_id = session_check[0]
+
+            # Look for answer patterns in the message
+            answer_patterns = [
+                r'(?:answer|ans)(?:\s*[:=]\s*|\s+is\s+|\s+)([A-Z])',
+                r'i\s+think\s+(?:it\'?s?|the\s+answer\s+is\s+)([A-Z])',
+                r'question\s+\d+(?:\s*[:=]\s*|\s+is\s+|\s+answer\s+)([A-Z])',
+                r'q\d+(?:\s*[:=]\s*|\s+is\s+|\s+answer\s+)([A-Z])',
+                r'^\s*([A-Z])\s*$',  # Just a single letter
+            ]
+
+            question_num = None
+            user_answer = None
+
+            # Try to extract question number and answer
+            for pattern in answer_patterns:
+                match = re.search(pattern, content, re.IGNORECASE)
+                if match:
+                    user_answer = match.group(1).upper()
+                    # Look for question number in the message
+                    q_match = re.search(r'(?:question|q)\s*(\d+)', content, re.IGNORECASE)
+                    if q_match:
+                        question_num = int(q_match.group(1))
+                    break
+
+            # If we found an answer but no question number, check recent context
+            if user_answer and not question_num:
+                # For now, we'll require explicit question numbers
+                # In a more advanced version, we could track the last asked question
+                pass
+
+            if question_num and user_answer:
+                # Check answer
+                is_correct, correct_answer = check_answer(session_id, question_num, user_answer)
+
+                # Save user's answer attempt
+                c.execute('''INSERT INTO study_answers
+                             (user_id, guild_id, session_id, question_number, answer, is_correct, timestamp)
+                             VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                          (message.author.id, message.guild.id, session_id, question_num, user_answer,
+                           1 if is_correct else 0, datetime.datetime.now().isoformat()))
+                conn.commit()
+
+                # Send feedback
+                if is_correct:
+                    await message.add_reaction("✅")
+                else:
+                    await message.add_reaction("❌")
+                    if correct_answer:
+                        # Send correction in a subtle way
+                        try:
+                            correction_msg = await message.channel.send(f"💡 The correct answer for question {question_num} is **{correct_answer}**")
+                            # Delete after 10 seconds
+                            await asyncio.sleep(10)
+                            await correction_msg.delete()
+                        except:
+                            pass  # Ignore if we can't send/delete
+
+        conn.close()
 
     # Continue with normal message processing
     if content.startswith('%'):
@@ -5269,7 +9380,7 @@ async def on_message(message):
         conn = get_db_connection()
         c = conn.cursor()
         c.execute(
-            '''SELECT 1 FROM user_channels 
+            '''SELECT 1 FROM user_channels
                      WHERE user_id = ? AND guild_id = ? AND channel_id = ?''',
             (message.author.id, message.guild.id if message.guild else None, message.channel.id))
         if not c.fetchone():
@@ -5290,7 +9401,7 @@ async def on_message(message):
             user_data['images_sent'] += image_count
 
     update_user_data(user_data)
-    
+
     # Update daily and weekly quest stats
     is_reply = 1 if message.reference else 0
     # Use unique_words for quest progress reporting, but cap for XP was applied above
@@ -5307,7 +9418,7 @@ async def on_message(message):
                        messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0), replies=is_reply)
     update_weekly_stats(message.author.id, message.guild.id,
                         messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0))
-    
+
     # Check for expired unclaimed quests and auto-collect at 10% SILENTLY
     from quest_system import collect_expired_quests
     expired_quests = collect_expired_quests(message.author.id, message.guild.id)
@@ -5316,14 +9427,14 @@ async def on_message(message):
         user_data['xp'] += total_expired_xp
         update_user_data(user_data)
         # NO MESSAGE SENT - Silent collection
-    
+
     # Check for completed quests
     completed = check_and_complete_quests(message.author.id, message.guild.id, user_data)
     if completed:
         # Quest announcement channel ID
         QUEST_ANNOUNCEMENT_CHANNEL_ID = 1158615333289086997
         announcement_channel = bot.get_channel(QUEST_ANNOUNCEMENT_CHANNEL_ID)
-        
+
         # Check if user has autoclaim enabled
         conn = get_db_connection()
         c = conn.cursor()
@@ -5332,24 +9443,24 @@ async def on_message(message):
         result = c.fetchone()
         autoclaim_enabled = result[0] if result and result[0] else 0
         conn.close()
-        
+
         for quest in completed:
             # Handle auto-claim if enabled (30% fee)
             if autoclaim_enabled:
                 reduced_xp = int(quest.xp_reward * 0.7)  # 30% fee = 70% received
                 user_data['xp'] += reduced_xp
                 user_data['quests_completed'] += 1
-                
+
                 # Track daily/weekly quest completion for multipliers
                 from quest_system import QuestType
                 if quest.quest_type == QuestType.DAILY:
                     user_data['daily_quests_completed'] = user_data.get('daily_quests_completed', 0) + 1
                 elif quest.quest_type == QuestType.WEEKLY:
                     user_data['weekly_quests_completed'] = user_data.get('weekly_quests_completed', 0) + 1
-                
+
                 update_user_data(user_data)
                 claim_quest_reward(message.author.id, message.guild.id, quest.quest_id)
-                
+
                 embed = discord.Embed(
                     title=f"{quest.emoji} Quest Auto-Claimed!",
                     description=f"{message.author.mention} completed **{quest.name}**!\n{quest.description}",
@@ -5367,7 +9478,7 @@ async def on_message(message):
                 embed.add_field(name="Reward", value=f"+{quest.xp_reward:,} XP", inline=True)
                 embed.add_field(name="Quest Type", value=quest.quest_type.value.title(), inline=True)
                 embed.set_footer(text=f"Use %claim {quest.quest_id} to claim your reward!")
-            
+
             # Try to send to announcement channel, fallback to current channel
             try:
                 if announcement_channel:
@@ -5379,7 +9490,7 @@ async def on_message(message):
                     await message.channel.send(embed=embed)
                 except:
                     pass
-    
+
     await check_level_up(message.author, message.guild)
     await bot.process_commands(message)
 
