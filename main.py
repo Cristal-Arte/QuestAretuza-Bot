@@ -26,32 +26,26 @@ import re
 VERSION = "5.0.0"
 
 # Flask app for uptime monitoring
-app = Flask('')
+flask_app = Flask('questuza-health')
 
 
-@app.route('/')
+@flask_app.route('/')
 def home():
-    return "Questuza is running!"
+    return "Questuza is running!", 200
 
 
-@app.route('/welcome')
+@flask_app.route('/welcome')
 def welcome():
     logging.info(f"Request received: {request.method} {request.path}")
-    return jsonify({'message': 'Welcome to the Flask API Service!'})
+    return jsonify({'message': 'Welcome to the Flask API Service!'}), 200
 
 
-def run():
-    app.run(host='0.0.0.0', port=8080)
+def run_flask():
+    flask_app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
 
 
-def keep_alive():
-    server = Thread(target=run)
-    server.daemon = True
-    server.start()
-
-
-# Start the Flask server
-keep_alive()
+# Start Flask in background — only once!
+Thread(target=run_flask, daemon=True).start()
 
 # Bot configuration
 intents = discord.Intents.all()
@@ -342,85 +336,6 @@ def init_db():
                     print(f"✅ Column {col_name} already exists, skipping...")
                 else:
                     raise
-
-    # Version 10: Add study system tables
-    if current_version < 10:
-        print("📚 Adding study system tables...")
-
-        # Study sessions table (active sessions)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
-                      (user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                       start_time TEXT, last_activity TEXT,
-                       PRIMARY KEY (user_id, guild_id))''')
-
-        # Study history table (completed sessions)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_history
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                       start_time TEXT, end_time TEXT, actual_duration INTEGER,
-                       completed INTEGER DEFAULT 0)''')
-
-        # Study answers table (for MCQ practice)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_answers
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       question_number INTEGER, answer TEXT, is_correct INTEGER,
-                       timestamp TEXT)''')
-
-        # Study bookmarks table
-        c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER,
-                       title TEXT, url TEXT, category TEXT,
-                       created_at TEXT)''')
-
-        # Indexes for study tables
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
-                      ON study_sessions(user_id, guild_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
-                      ON study_history(user_id, guild_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
-                      ON study_answers(user_id, guild_id, session_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
-                      ON study_bookmarks(user_id, guild_id)''')
-
-        print("✅ Study system tables created successfully")
-
-    # Insert/update version info
-    version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
-    c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
-                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
-
-    conn.commit()
-    conn.close()
-    print("✅ Database initialized/updated successfully")
-
-
-# Initialize database with safety checks
-try:
-    init_db()
-    init_quest_tables()
-    print("✅ Quest system initialized")
-except Exception as e:
-    print(f"❌ Database initialization error: {e}")
-    # Try to restore from most recent backup
-    import os
-    import glob
-
-    backup_files = glob.glob('backups/questuza_backup_*.db')
-    if backup_files:
-        latest_backup = max(backup_files, key=os.path.getctime)
-        try:
-            import shutil
-            shutil.copy2(latest_backup, 'questuza.db')
-            print(f"✅ Restored from backup: {latest_backup}")
-            init_db()  # Try initialization again
-        except Exception as restore_error:
-            print(f"❌ Backup restoration failed: {restore_error}")
-    else:
-        print("❌ No backup files found")
 
     # Version 10: Add study system tables
     if current_version < 10:
@@ -6245,51 +6160,54 @@ async def reset_stats_cmd(ctx, member: discord.Member, stat_type: str = "all"):
     await ctx.send(embed=embed)
 
 
-# Study system commands
-@bot.group(name='study', invoke_without_command=True)
-async def study_group(ctx):
-    """Study system commands for PDF-based learning and MCQ practice"""
-    embed = discord.Embed(
-        title="📚 Study System",
-        description="Commands for managing study sessions, PDFs, and answer processing",
-        color=discord.Color.blue()
-    )
-    embed.add_field(
-        name="Session Management",
-        value="`%study start [type] [duration]` - Begin a study session\n"
-              "`%study stop` - End current session\n"
-              "`%study status` - Check session progress\n"
-              "`%study history [page]` - View past study sessions",
-        inline=False
-    )
-    embed.add_field(
-        name="Test Mode",
-        value="`%study start test <minutes>` - Start timed MCQ test\n"
-              "`%study testsummary [session_id]` - View test results",
-        inline=False
-    )
-    embed.add_field(
-        name="PDF Tools",
-        value="`%study pdf <url> [page]` - Display PDF page as image\n"
-              "`%study answers <url> [pattern]` - Process answer key from PDF",
-        inline=False
-    )
-    embed.add_field(
-        name="Configuration",
-        value="`%study patterns` - Configure answer recognition patterns\n"
-              "`%study bookmarks` - Manage study bookmarks",
-        inline=False
-    )
-    embed.add_field(
-        name="Analytics & History",
-        value="`%study analytics [period]` - View study statistics\n"
-              "`%study history [page]` - Browse study session history\n"
-              "`%study trends [period]` - View study progress trends\n"
-              "`%study leaderboard [metric] [period]` - View study leaderboards\n"
-              "`%study export [format]` - Export your study data",
-        inline=False
-    )
-    await ctx.send(embed=embed)
+# Study system commands — safe registration
+if 'study' not in bot.all_commands:
+    @bot.group(name='study', invoke_without_command=True)
+    async def study_group(ctx):
+        """Study system commands for PDF-based learning and MCQ practice"""
+        embed = discord.Embed(
+            title="📚 Study System",
+            description="Commands for managing study sessions, PDFs, and answer processing",
+            color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="Session Management",
+            value="`%study start [type] [duration]` - Begin a study session\n"
+                  "`%study stop` - End current session\n"
+                  "`%study status` - Check session progress\n"
+                  "`%study history [page]` - View past study sessions",
+            inline=False
+        )
+        embed.add_field(
+            name="Test Mode",
+            value="`%study start test <minutes>` - Start timed MCQ test\n"
+                  "`%study testsummary [session_id]` - View test results",
+            inline=False
+        )
+        embed.add_field(
+            name="PDF Tools",
+            value="`%study pdf <url> [page]` - Display PDF page as image\n"
+                  "`%study answers <url> [pattern]` - Process answer key from PDF",
+            inline=False
+        )
+        embed.add_field(
+            name="Configuration",
+            value="`%study patterns` - Configure answer recognition patterns\n"
+                  "`%study bookmarks` - Manage study bookmarks",
+            inline=False
+        )
+        embed.add_field(
+            name="Analytics & History",
+            value="`%study analytics [period]` - View study statistics\n"
+                  "`%study history [page]` - Browse study session history\n"
+                  "`%study trends [period]` - View study progress trends\n"
+                  "`%study leaderboard [metric] [period]` - View study leaderboards\n"
+                  "`%study export [format]` - Export your study data",
+            inline=False
+        )
+        await ctx.send(embed=embed)
+else:
+    print("⚠️  'study' command group already registered — skipping.")
 
 
 @study_group.command(name='start')
