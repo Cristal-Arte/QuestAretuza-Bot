@@ -6217,48 +6217,59 @@ if 'study' not in bot.all_commands:
         """
 
 
-    conn = get_db_connection()
-    c = conn.cursor()
+    @study_group.command(name='stop')
+    async def study_stop(ctx):
+        """Stop the current study session"""
+        conn = get_db_connection()
+        c = conn.cursor()
 
-    # Get active session
-    c.execute('''SELECT session_id, start_time, intended_duration, study_type, subject
-                 FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
-              (ctx.author.id, ctx.guild.id))
-    actual_duration = int((datetime.datetime.now() - start_time).total_seconds())
+        # Get active session
+        c.execute('''SELECT session_id, start_time, intended_duration, study_type, subject
+                     FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+        session_data = c.fetchone()
 
-    # Move to history
-    c.execute('''INSERT INTO study_history
-                 (user_id, guild_id, session_id, study_type, subject, mood,
-                  intended_duration, start_time, end_time, actual_duration, completed)
-                 SELECT user_id, guild_id, session_id, study_type, subject, mood,
-                        intended_duration, start_time, ?, ?, 1
-                 FROM study_sessions
-                 WHERE user_id = ? AND guild_id = ?''',
-              (datetime.datetime.now().isoformat(), actual_duration, ctx.author.id, ctx.guild.id))
+        if not session_data:
+            await ctx.send("❌ You don't have an active study session!")
+            conn.close()
+            return
 
-    # Remove from active sessions
-    c.execute('''DELETE FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
-              (ctx.author.id, ctx.guild.id))
+        session_id, start_time_str, intended_duration, study_type, subject = session_data
+        start_time = datetime.datetime.fromisoformat(start_time_str)
+        actual_duration = int((datetime.datetime.now() - start_time).total_seconds())
 
-    conn.commit()
-    conn.close()
+        # Move to history
+        c.execute('''INSERT INTO study_history
+                     (user_id, guild_id, session_id, study_type, subject, mood,
+                      intended_duration, start_time, end_time, actual_duration, completed)
+                     SELECT user_id, guild_id, session_id, study_type, subject, mood,
+                            intended_duration, start_time, ?, ?, 1
+                     FROM study_sessions
+                     WHERE user_id = ? AND guild_id = ?''',
+                  (datetime.datetime.now().isoformat(), actual_duration, ctx.author.id, ctx.guild.id))
 
-    # Calculate duration display
-    hours = actual_duration // 3600
-    minutes = (actual_duration % 3600) // 60
-    duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+        # Remove from active sessions
+        c.execute('''DELETE FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
 
-    embed = discord.Embed(
-        title="✅ Study Session Ended",
-        description=f"**{study_type}** session completed!",
-        color=discord.Color.green()
-    )
-    embed.add_field(name="Subject", value=subject or "Not specified", inline=True)
-    embed.add_field(name="Duration", value=duration_str, inline=True)
-    embed.add_field(name="Planned", value=f"{intended_duration} minutes", inline=True)
+        conn.commit()
+        conn.close()
 
-    await ctx.send(embed=embed)
+        # Calculate duration display
+        hours = actual_duration // 3600
+        minutes = (actual_duration % 3600) // 60
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
+        embed = discord.Embed(
+            title="✅ Study Session Ended",
+            description=f"**{study_type}** session completed!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Subject", value=subject or "Not specified", inline=True)
+        embed.add_field(name="Duration", value=duration_str, inline=True)
+        embed.add_field(name="Planned", value=f"{intended_duration} minutes", inline=True)
+
+        await ctx.send(embed=embed)
 
 @study_group.command(name='status')
 async def study_status(ctx):
