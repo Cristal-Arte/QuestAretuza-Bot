@@ -19,9 +19,11 @@ from quest_system import (
 from PIL import Image, ImageDraw, ImageFont
 import requests
 from io import BytesIO
+import fitz  # PyMuPDF for PDF handling
+import re
 
 # Bot version - Update this when making changes
-VERSION = "3.0.0"
+VERSION = "4.0.1"
 
 # Flask app for uptime monitoring
 app = Flask('')
@@ -283,10 +285,105 @@ def init_db():
 
         print("✅ Added sample trivia questions")
 
+    # Version 7: Add profile card fields (about_me and background_url)
+    if current_version < 7:
+        print("🎨 Adding profile card fields...")
+        columns_to_add = [
+            ('about_me', 'TEXT'),
+            ('background_url', 'TEXT')
+        ]
+
+        for col_name, col_type in columns_to_add:
+            try:
+                c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
+                print(f"✅ Added column: {col_name}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" in str(e).lower():
+                    print(f"✅ Column {col_name} already exists, skipping...")
+                else:
+                    raise
+
+    # Version 8: Add profile card background color (separate from embed color)
+    if current_version < 8:
+        print("🎨 Adding profile card background color field...")
+        try:
+            c.execute('ALTER TABLE users ADD COLUMN profile_card_bg_color TEXT')
+            print("✅ Added column: profile_card_bg_color")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" in str(e).lower():
+                print("✅ Column profile_card_bg_color already exists, skipping...")
+            else:
+                raise
+
+    # Version 9: Add profile card customization fields
+    if current_version < 9:
+        print("🎨 Adding profile card customization fields...")
+        columns_to_add = [
+            ('banner_brightness', 'REAL DEFAULT 0.0'),  # 0-100% darkness
+            ('card_padding', 'REAL DEFAULT 1.2'),  # Multiplier for padding (default 3x = 1.2 inches)
+            ('card_font_size', 'REAL DEFAULT 33.0'),  # Font size multiplier
+            ('custom_pfp_url', 'TEXT'),  # Custom profile picture URL
+        ]
+
+        for col_name, col_type in columns_to_add:
+            try:
+                c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
+                print(f"✅ Added column: {col_name}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" in str(e).lower():
+                    print(f"✅ Column {col_name} already exists, skipping...")
+                else:
+                    raise
+
+    # Version 10: Add study system tables
+    if current_version < 10:
+        print("📚 Adding study system tables...")
+
+        # Study sessions table (active sessions)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
+                     (user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                      study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                      start_time TEXT, last_activity TEXT,
+                      PRIMARY KEY (user_id, guild_id))''')
+
+        # Study history table (completed sessions)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_history
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                      study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
+                      start_time TEXT, end_time TEXT, actual_duration INTEGER,
+                      completed INTEGER DEFAULT 0)''')
+
+        # Study answers table (for MCQ practice)
+        c.execute('''CREATE TABLE IF NOT EXISTS study_answers
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      user_id INTEGER, guild_id INTEGER, session_id TEXT,
+                      question_number INTEGER, answer TEXT, is_correct INTEGER,
+                      timestamp TEXT)''')
+
+        # Study bookmarks table
+        c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      user_id INTEGER, guild_id INTEGER,
+                      title TEXT, url TEXT, category TEXT,
+                      created_at TEXT)''')
+
+        # Indexes for study tables
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
+                     ON study_sessions(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
+                     ON study_history(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
+                     ON study_answers(user_id, guild_id, session_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
+                     ON study_bookmarks(user_id, guild_id)''')
+
+        print("✅ Study system tables created successfully")
+
     # Insert/update version info
-    c.execute(
-        '''INSERT OR REPLACE INTO db_version (version, updated_at)
-                 VALUES (?, ?)''', (6, datetime.datetime.now().isoformat()))
+    version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
+    c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
+                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
 
     conn.commit()
     conn.close()
@@ -550,6 +647,27 @@ def update_user_data(user_data: Dict):
     conn.close()
 
 
+def get_user_rank(user_id: int, guild_id: int) -> int:
+    """Get user's rank in the overall leaderboard"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Get all users ordered by level DESC, xp DESC
+    c.execute('''SELECT user_id FROM users 
+                 WHERE guild_id = ? 
+                 ORDER BY level DESC, xp DESC''',
+              (guild_id,))
+    results = c.fetchall()
+    conn.close()
+    
+    # Find the rank (1-indexed)
+    for rank, (uid,) in enumerate(results, 1):
+        if uid == user_id:
+            return rank
+    
+    return 0  # User not found in leaderboard
+
+
 def count_unique_words(text: str) -> int:
     text = re.sub(r'http\S+', '', text)
     text = re.sub(r'<@!?\d+>', '', text)
@@ -590,6 +708,90 @@ disconnect_time = None
 reconnect_attempts = 0
 max_reconnect_attempts = 5
 base_reconnect_delay = 5  # seconds
+
+# Study system global variables
+study_setup_states = {}
+
+# Study system functions
+def validate_pdf_url(url):
+    """Validate if a URL points to a PDF"""
+    try:
+        response = requests.head(url, timeout=10)
+        content_type = response.headers.get('content-type', '').lower()
+        return 'pdf' in content_type or url.lower().endswith('.pdf')
+    except:
+        return False
+
+def extract_pdf_text(url):
+    """Extract text from a PDF URL"""
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+
+        # Save to temporary file
+        with open('temp_pdf.pdf', 'wb') as f:
+            f.write(response.content)
+
+        # Extract text using PyMuPDF
+        doc = fitz.open('temp_pdf.pdf')
+        text = ""
+        for page in doc:
+            text += page.get_text()
+        doc.close()
+
+        # Clean up
+        import os
+        os.remove('temp_pdf.pdf')
+
+        return text
+    except Exception as e:
+        print(f"Error extracting PDF text: {e}")
+        return None
+
+def parse_answer_key(text, pattern=None):
+    """Parse answer key from PDF text using patterns"""
+    answers = {}
+
+    if not pattern:
+        # Try common patterns
+        patterns = [
+            r'Question\s*(\d+)[:\.\s]*[Aa]nswer[:\.\s]*([A-Z])',
+            r'(\d+)[\.\)]\s*[Aa]nswer[:\.\s]*([A-Z])',
+            r'Q(\d+)[:\.\s]*([A-Z])',
+            r'(\d+)\)\s*([A-Z])',
+            r'(\d+)[:\.\s]*([A-Z])'
+        ]
+    else:
+        patterns = [pattern]
+
+    for pattern_regex in patterns:
+        matches = re.findall(pattern_regex, text, re.IGNORECASE)
+        for match in matches:
+            try:
+                question_num = int(match[0])
+                answer = match[1].upper()
+                answers[question_num] = answer
+            except:
+                continue
+
+    return answers
+
+def check_answer(session_id, question_num, user_answer):
+    """Check if user's answer is correct"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Get the correct answer for this session
+    c.execute('''SELECT answer FROM study_answers
+                 WHERE session_id = ? AND question_number = ? AND is_correct = 1''',
+             (session_id, question_num))
+    result = c.fetchone()
+    conn.close()
+
+    if result:
+        correct_answer = result[0].upper()
+        return user_answer.upper() == correct_answer, correct_answer
+    return False, None
 
 # Bot events
 @bot.event
@@ -773,6 +975,192 @@ async def on_message(message):
                     embed.set_footer(text="💡 Tip: All Questuza commands start with %")
                     await message.channel.send(embed=embed)
                     return
+
+    # Handle study setup conversation
+    if message.author.id in study_setup_states:
+        setup_state = study_setup_states[message.author.id]
+        step = setup_state['step']
+        setup_msg = setup_state['message']
+        data = setup_state['data']
+
+        if step == 1:  # Study type
+            study_type = content.strip().title()
+            valid_types = ['MCQ Practice', 'MCQ Test', 'Reading', 'Other']
+            if study_type not in valid_types:
+                study_type = 'Other'
+
+            data['study_type'] = study_type
+
+            # Move to next step
+            embed = discord.Embed(
+                title="📚 Study Session Setup",
+                description="Great! Now let's continue.",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="Question 2/4",
+                value="What's the subject/topic you're studying?",
+                inline=False
+            )
+            await setup_msg.edit(embed=embed)
+            setup_state['step'] = 2
+
+        elif step == 2:  # Subject
+            data['subject'] = content.strip()
+
+            # Move to next step
+            embed = discord.Embed(
+                title="📚 Study Session Setup",
+                description="Perfect!",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="Question 3/4",
+                value="How are you feeling right now? (e.g., focused, tired, motivated)",
+                inline=False
+            )
+            await setup_msg.edit(embed=embed)
+            setup_state['step'] = 3
+
+        elif step == 3:  # Mood
+            data['mood'] = content.strip()
+
+            # Move to next step
+            embed = discord.Embed(
+                title="📚 Study Session Setup",
+                description="Almost done!",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="Question 4/4",
+                value="How long do you plan to study? (in minutes, e.g., 30, 60, 90)",
+                inline=False
+            )
+            await setup_msg.edit(embed=embed)
+            setup_state['step'] = 4
+
+        elif step == 4:  # Duration
+            try:
+                duration = int(content.strip())
+                if duration <= 0:
+                    duration = 30  # Default
+                elif duration > 480:  # Max 8 hours
+                    duration = 480
+            except ValueError:
+                duration = 30  # Default
+
+            data['intended_duration'] = duration
+
+            # Complete setup and start session
+            session_id = f"{message.author.id}_{int(datetime.datetime.now().timestamp())}"
+
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''INSERT INTO study_sessions
+                          (user_id, guild_id, session_id, study_type, subject, mood,
+                           intended_duration, start_time, last_activity)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                       (message.author.id, message.guild.id, session_id,
+                        data.get('study_type'), data.get('subject'), data.get('mood'),
+                        data.get('intended_duration'),
+                        datetime.datetime.now().isoformat(),
+                        datetime.datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+
+            # Clear setup state
+            del study_setup_states[message.author.id]
+
+            # Send confirmation
+            embed = discord.Embed(
+                title="🚀 Study Session Started!",
+                description=f"Your study session has begun, {message.author.mention}!",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Type", value=data.get('study_type', 'General'), inline=True)
+            embed.add_field(name="Subject", value=data.get('subject', 'Not specified'), inline=True)
+            embed.add_field(name="Mood", value=data.get('mood', 'Not specified'), inline=True)
+            embed.add_field(name="Planned Duration", value=f"{duration} minutes", inline=True)
+            embed.add_field(
+                name="Commands",
+                value="• Use `%study stop` to end the session\n• Use `%study status` to check progress\n• Submit answers naturally (e.g., 'Answer: B' or 'I think it's C')",
+                inline=False
+            )
+
+            await setup_msg.edit(embed=embed)
+
+        return  # Don't process as regular message
+
+    # Handle natural language answer submission during active study sessions
+    if content and not content.startswith('%'):
+        # Check if user has active study session
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''SELECT session_id FROM study_sessions
+                     WHERE user_id = ? AND guild_id = ?''',
+                 (message.author.id, message.guild.id))
+        session_check = c.fetchone()
+
+        if session_check:
+            session_id = session_check[0]
+
+            # Look for answer patterns in the message
+            answer_patterns = [
+                r'(?:answer|ans)(?:\s*[:=]\s*|\s+is\s+|\s+)([A-Z])',
+                r'i\s+think\s+(?:it\'?s?|the\s+answer\s+is\s+)([A-Z])',
+                r'question\s+\d+(?:\s*[:=]\s*|\s+is\s+|\s+answer\s+)([A-Z])',
+                r'q\d+(?:\s*[:=]\s*|\s+is\s+|\s+answer\s+)([A-Z])',
+                r'^\s*([A-Z])\s*$',  # Just a single letter
+            ]
+
+            question_num = None
+            user_answer = None
+
+            # Try to extract question number and answer
+            for pattern in answer_patterns:
+                match = re.search(pattern, content, re.IGNORECASE)
+                if match:
+                    user_answer = match.group(1).upper()
+                    # Look for question number in the message
+                    q_match = re.search(r'(?:question|q)\s*(\d+)', content, re.IGNORECASE)
+                    if q_match:
+                        question_num = int(q_match.group(1))
+                    break
+
+            # If we found an answer but no question number, check recent context
+            if user_answer and not question_num:
+                # For now, we'll require explicit question numbers
+                # In a more advanced version, we could track the last asked question
+                pass
+
+            if question_num and user_answer:
+                # Check answer
+                is_correct, correct_answer = check_answer(session_id, question_num, user_answer)
+
+                # Save user's answer attempt
+                c.execute('''INSERT INTO study_answers
+                             (user_id, guild_id, session_id, question_number, answer, is_correct, timestamp)
+                             VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                         (message.author.id, message.guild.id, session_id, question_num, user_answer,
+                          1 if is_correct else 0, datetime.datetime.now().isoformat()))
+                conn.commit()
+
+                # Send feedback
+                if is_correct:
+                    await message.add_reaction("✅")
+                else:
+                    await message.add_reaction("❌")
+                    if correct_answer:
+                        # Send correction in a subtle way
+                        try:
+                            correction_msg = await message.channel.send(f"💡 The correct answer for question {question_num} is **{correct_answer}**")
+                            # Delete after 10 seconds
+                            await asyncio.sleep(10)
+                            await correction_msg.delete()
+                        except:
+                            pass  # Ignore if we can't send/delete
+
+        conn.close()
 
     # Continue with normal message processing
     if content.startswith('%'):
@@ -1435,6 +1823,572 @@ async def trivia_cmd(ctx, action: str = None, *, args: str = None):
         await ctx.send("❌ Invalid action! Use `%trivia` for help.")
 
 
+# Study system commands
+@bot.command(name='study')
+async def study_cmd(ctx, action: str = None, *, args: str = None):
+    """Study session management - Usage: %study <start|stop|status|bookmarks> [args]"""
+
+    if not action:
+        embed = discord.Embed(
+            title="📚 Study System",
+            description="Manage your study sessions and resources",
+            color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="Session Management",
+            value="`%study start` - Begin a new study session\n"
+                  "`%study stop` - End current study session\n"
+                  "`%study status` - Check current session status",
+            inline=False
+        )
+        embed.add_field(
+            name="MCQ Practice",
+            value="`%study pdf load <url>` - Load PDF for study\n"
+                  "`%study pdf answers <url>` - Load answer key from PDF\n"
+                  "`%study answer <question> <answer>` - Submit answer (e.g., `1 B`)",
+            inline=False
+        )
+        embed.add_field(
+            name="Resources",
+            value="`%study bookmarks` - Manage study bookmarks\n"
+                  "`%study bookmarks add <title> <url>` - Save study resource",
+            inline=False
+        )
+        embed.add_field(
+            name="Features",
+            value="• Session time tracking\n"
+                  "• PDF integration\n"
+                  "• Answer checking\n"
+                  "• Resource bookmarking\n"
+                  "• Study analytics",
+            inline=False
+        )
+        await ctx.send(embed=embed)
+        return
+
+    action = action.lower()
+
+    if action == "start":
+        # Check if user already has an active session
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''SELECT session_id FROM study_sessions
+                     WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+        existing_session = c.fetchone()
+
+        if existing_session:
+            conn.close()
+            embed = discord.Embed(
+                title="⚠️ Active Session Detected",
+                description="You already have an active study session. Use `%study stop` to end it first.",
+                color=discord.Color.orange()
+            )
+            await ctx.send(embed=embed)
+            return
+
+        # Start interactive setup conversation
+        embed = discord.Embed(
+            title="📚 Study Session Setup",
+            description="Let's set up your study session! I'll ask a few questions.",
+            color=discord.Color.green()
+        )
+        embed.add_field(
+            name="Question 1/4",
+            value="What type of study session?\n• `MCQ Practice`\n• `MCQ Test`\n• `Reading`\n• `Other`",
+            inline=False
+        )
+        setup_msg = await ctx.send(embed=embed)
+
+        # Store setup state
+        study_setup_states[ctx.author.id] = {
+            'step': 1,
+            'message': setup_msg,
+            'data': {}
+        }
+
+        conn.close()
+
+    elif action == "stop":
+        # Check for active session
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''SELECT * FROM study_sessions
+                     WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+        session_data = c.fetchone()
+
+        if not session_data:
+            conn.close()
+            await ctx.send("❌ You don't have an active study session to stop!")
+            return
+
+        # Calculate duration and save to history
+        session = dict(session_data)
+        start_time = datetime.datetime.fromisoformat(session['start_time'])
+        end_time = datetime.datetime.now()
+        duration_seconds = int((end_time - start_time).total_seconds())
+
+        # Insert into history
+        c.execute('''INSERT INTO study_history
+                     (user_id, guild_id, session_id, study_type, subject, mood,
+                      intended_duration, start_time, end_time, actual_duration, completed)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)''',
+                  (ctx.author.id, ctx.guild.id, session['session_id'],
+                   session['study_type'], session['subject'], session['mood'],
+                   session['intended_duration'], session['start_time'],
+                   end_time.isoformat(), duration_seconds))
+
+        # Remove active session
+        c.execute('''DELETE FROM study_sessions
+                     WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+
+        conn.commit()
+        conn.close()
+
+        # Format duration
+        hours = duration_seconds // 3600
+        minutes = (duration_seconds % 3600) // 60
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+        embed = discord.Embed(
+            title="✅ Study Session Ended",
+            description=f"Great work, {ctx.author.mention}! Your study session has been completed.",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Duration", value=duration_str, inline=True)
+        embed.add_field(name="Subject", value=session['subject'] or "Not specified", inline=True)
+        embed.add_field(name="Type", value=session['study_type'] or "General", inline=True)
+
+        await ctx.send(embed=embed)
+
+    elif action == "status":
+        # Check current session status
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''SELECT * FROM study_sessions
+                     WHERE user_id = ? AND guild_id = ?''',
+                  (ctx.author.id, ctx.guild.id))
+        session_data = c.fetchone()
+        conn.close()
+
+        if not session_data:
+            embed = discord.Embed(
+                title="📊 Study Status",
+                description="You don't have an active study session.",
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="Start a Session",
+                value="Use `%study start` to begin studying!",
+                inline=False
+            )
+            await ctx.send(embed=embed)
+            return
+
+        session = dict(session_data)
+        start_time = datetime.datetime.fromisoformat(session['start_time'])
+        elapsed = datetime.datetime.now() - start_time
+        elapsed_seconds = int(elapsed.total_seconds())
+
+        hours = elapsed_seconds // 3600
+        minutes = (elapsed_seconds % 3600) // 60
+        elapsed_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+        embed = discord.Embed(
+            title="📊 Current Study Session",
+            description=f"Active session for {ctx.author.mention}",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Type", value=session['study_type'] or "General", inline=True)
+        embed.add_field(name="Subject", value=session['subject'] or "Not specified", inline=True)
+        embed.add_field(name="Elapsed Time", value=elapsed_str, inline=True)
+        embed.add_field(name="Started", value=start_time.strftime("%H:%M"), inline=True)
+        embed.add_field(name="Mood", value=session['mood'] or "Not specified", inline=True)
+
+        if session['intended_duration']:
+            remaining = session['intended_duration'] * 60 - elapsed_seconds
+            if remaining > 0:
+                rem_hours = remaining // 3600
+                rem_minutes = (remaining % 3600) // 60
+                remaining_str = f"{rem_hours}h {rem_minutes}m" if rem_hours > 0 else f"{rem_minutes}m"
+                embed.add_field(name="Time Remaining", value=remaining_str, inline=True)
+            else:
+                embed.add_field(name="Status", value="Over intended duration!", inline=True)
+
+        await ctx.send(embed=embed)
+
+    elif action == "pdf":
+        # Handle PDF operations
+        if not args:
+            embed = discord.Embed(
+                title="📄 PDF Study Tools",
+                description="Work with PDF study materials",
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="Load PDF",
+                value="`%study pdf load <url>` - Load a PDF for study",
+                inline=False
+            )
+            embed.add_field(
+                name="Set Answer Key",
+                value="`%study pdf answers <url> [pattern]` - Set answer key from PDF",
+                inline=False
+            )
+            embed.add_field(
+                name="Manual Answers",
+                value="`%study pdf manual <question> <answer>` - Manually set an answer",
+                inline=False
+            )
+            await ctx.send(embed=embed)
+            return
+
+        # Check if user has active session
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''SELECT session_id FROM study_sessions
+                     WHERE user_id = ? AND guild_id = ?''',
+                 (ctx.author.id, ctx.guild.id))
+        session_check = c.fetchone()
+
+        if not session_check:
+            conn.close()
+            await ctx.send("❌ You need an active study session to work with PDFs. Use `%study start` first.")
+            return
+
+        session_id = session_check[0]
+
+        if args.startswith("load "):
+            # Load a PDF for study
+            pdf_url = args[5:].strip()
+            if not pdf_url.startswith(('http://', 'https://')):
+                conn.close()
+                await ctx.send("❌ Please provide a valid URL starting with http:// or https://")
+                return
+
+            # Validate PDF
+            if not validate_pdf_url(pdf_url):
+                conn.close()
+                await ctx.send("❌ The provided URL doesn't appear to be a valid PDF. Please check the link.")
+                return
+
+            embed = discord.Embed(
+                title="📄 PDF Loaded Successfully!",
+                description="Your PDF has been loaded for study.",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="URL", value=pdf_url, inline=False)
+            embed.add_field(
+                name="Next Steps",
+                value="• Use `%study pdf answers <url>` to load answer key\n• Or use `%study answer <question> <answer>` to submit answers",
+                inline=False
+            )
+            await ctx.send(embed=embed)
+
+        elif args.startswith("answers "):
+            # Load answer key from PDF
+            parts = args[8:].strip().split()
+            answer_url = parts[0]
+            pattern = " ".join(parts[1:]) if len(parts) > 1 else None
+
+            if not answer_url.startswith(('http://', 'https://')):
+                conn.close()
+                await ctx.send("❌ Please provide a valid URL starting with http:// or https://")
+                return
+
+            # Validate PDF
+            if not validate_pdf_url(answer_url):
+                conn.close()
+                await ctx.send("❌ The provided URL doesn't appear to be a valid PDF. Please check the link.")
+                return
+
+            # Extract text and parse answers
+            pdf_text = extract_pdf_text(answer_url)
+            if not pdf_text:
+                conn.close()
+                await ctx.send("❌ Failed to extract text from the PDF. Please try a different PDF or manual entry.")
+                return
+
+            answers = parse_answer_key(pdf_text, pattern)
+
+            if not answers:
+                conn.close()
+                embed = discord.Embed(
+                    title="⚠️ No Answers Found",
+                    description="Couldn't automatically parse answers from the PDF.",
+                    color=discord.Color.orange()
+                )
+                embed.add_field(
+                    name="Try these options",
+                    value="• Use a different pattern: `%study pdf answers <url> \"Question \\d+: Answer: ([A-Z])\"`\n• Manually set answers: `%study pdf manual <question> <answer>`",
+                    inline=False
+                )
+                await ctx.send(embed=embed)
+                return
+
+            # Save answers to database
+            for question_num, answer in answers.items():
+                c.execute('''INSERT INTO study_answers
+                             (user_id, guild_id, session_id, question_number, answer, is_correct, timestamp)
+                             VALUES (?, ?, ?, ?, ?, 1, ?)''',
+                         (ctx.author.id, ctx.guild.id, session_id, question_num, answer,
+                          datetime.datetime.now().isoformat()))
+
+            conn.commit()
+            conn.close()
+
+            embed = discord.Embed(
+                title="✅ Answer Key Loaded!",
+                description=f"Successfully loaded {len(answers)} answers from the PDF.",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="Sample Answers",
+                value="\n".join([f"Q{q}: {a}" for q, a in list(answers.items())[:5]]),
+                inline=False
+            )
+            if len(answers) > 5:
+                embed.set_footer(text=f"Total answers loaded: {len(answers)}")
+            await ctx.send(embed=embed)
+
+        elif args.startswith("manual "):
+            # Manually set an answer
+            parts = args[7:].strip().split()
+            if len(parts) != 2:
+                conn.close()
+                await ctx.send("❌ Usage: `%study pdf manual <question_number> <answer>`")
+                return
+
+            try:
+                question_num = int(parts[0])
+                answer = parts[1].upper()
+            except ValueError:
+                conn.close()
+                await ctx.send("❌ Question number must be a number and answer must be a letter (A, B, C, etc.)")
+                return
+
+            # Save manual answer
+            c.execute('''INSERT OR REPLACE INTO study_answers
+                         (user_id, guild_id, session_id, question_number, answer, is_correct, timestamp)
+                         VALUES (?, ?, ?, ?, ?, 1, ?)''',
+                     (ctx.author.id, ctx.guild.id, session_id, question_num, answer,
+                      datetime.datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+
+            embed = discord.Embed(
+                title="✅ Answer Set Manually",
+                description=f"Question {question_num} answer set to **{answer}**",
+                color=discord.Color.green()
+            )
+            await ctx.send(embed=embed)
+
+        else:
+            conn.close()
+            await ctx.send("❌ Invalid PDF command. Use `%study pdf` for help.")
+
+    elif action == "answer":
+        # Submit an answer
+        if not args:
+            await ctx.send("❌ Usage: `%study answer <question_number> <answer>` (e.g., `%study answer 1 B`)")
+            return
+
+        # Check if user has active session
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''SELECT session_id FROM study_sessions
+                     WHERE user_id = ? AND guild_id = ?''',
+                 (ctx.author.id, ctx.guild.id))
+        session_check = c.fetchone()
+
+        if not session_check:
+            conn.close()
+            await ctx.send("❌ You need an active study session to submit answers. Use `%study start` first.")
+            return
+
+        session_id = session_check[0]
+
+        parts = args.split()
+        if len(parts) != 2:
+            conn.close()
+            await ctx.send("❌ Usage: `%study answer <question_number> <answer>` (e.g., `%study answer 1 B`)")
+            return
+
+        try:
+            question_num = int(parts[0])
+            user_answer = parts[1].upper()
+        except ValueError:
+            conn.close()
+            await ctx.send("❌ Question number must be a number and answer must be a letter (A, B, C, etc.)")
+            return
+
+        # Check answer
+        is_correct, correct_answer = check_answer(session_id, question_num, user_answer)
+
+        # Save user's answer attempt
+        c.execute('''INSERT INTO study_answers
+                     (user_id, guild_id, session_id, question_number, answer, is_correct, timestamp)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                 (ctx.author.id, ctx.guild.id, session_id, question_num, user_answer,
+                  1 if is_correct else 0, datetime.datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+
+        if is_correct:
+            embed = discord.Embed(
+                title="✅ Correct Answer!",
+                description=f"Question {question_num}: **{user_answer}** is correct!",
+                color=discord.Color.green()
+            )
+        else:
+            embed = discord.Embed(
+                title="❌ Incorrect Answer",
+                description=f"Question {question_num}: **{user_answer}** is wrong.",
+                color=discord.Color.red()
+            )
+            if correct_answer:
+                embed.add_field(name="Correct Answer", value=f"||{correct_answer}||", inline=True)
+
+        await ctx.send(embed=embed)
+
+    elif action == "bookmarks":
+        # Handle bookmarks
+        if not args:
+            # Show user's bookmarks
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''SELECT id, title, url, category, created_at FROM study_bookmarks
+                         WHERE user_id = ? AND guild_id = ?
+                         ORDER BY created_at DESC''',
+                     (ctx.author.id, ctx.guild.id))
+            bookmarks = c.fetchall()
+            conn.close()
+
+            if not bookmarks:
+                embed = discord.Embed(
+                    title="📚 Study Bookmarks",
+                    description="You don't have any bookmarks yet!",
+                    color=discord.Color.blue()
+                )
+                embed.add_field(
+                    name="How to add bookmarks",
+                    value="Use `%study bookmarks add <title> <url> [category]` to save study resources.",
+                    inline=False
+                )
+                await ctx.send(embed=embed)
+                return
+
+            embed = discord.Embed(
+                title="📚 Your Study Bookmarks",
+                description=f"You have {len(bookmarks)} bookmark(s)",
+                color=discord.Color.blue()
+            )
+
+            for bookmark in bookmarks[:10]:  # Show first 10
+                bookmark_id, title, url, category, created_at = bookmark
+                category_text = f" ({category})" if category else ""
+                created_date = datetime.datetime.fromisoformat(created_at).strftime("%Y-%m-%d")
+                embed.add_field(
+                    name=f"{title}{category_text}",
+                    value=f"**URL:** {url}\n**Added:** {created_date}\n**ID:** `{bookmark_id}`",
+                    inline=False
+                )
+
+            if len(bookmarks) > 10:
+                embed.set_footer(text=f"Showing first 10 bookmarks. Total: {len(bookmarks)}")
+
+            await ctx.send(embed=embed)
+
+        elif args.startswith("add "):
+            # Add a bookmark
+            parts = args[4:].strip().split()
+            if len(parts) < 2:
+                await ctx.send("❌ Usage: `%study bookmarks add <title> <url> [category]`")
+                return
+
+            title = parts[0]
+            url = parts[1]
+            category = " ".join(parts[2:]) if len(parts) > 2 else None
+
+            # Validate URL
+            if not url.startswith(('http://', 'https://')):
+                await ctx.send("❌ Please provide a valid URL starting with http:// or https://")
+                return
+
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''INSERT INTO study_bookmarks (user_id, guild_id, title, url, category, created_at)
+                         VALUES (?, ?, ?, ?, ?, ?)''',
+                     (ctx.author.id, ctx.guild.id, title, url, category, datetime.datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+
+            embed = discord.Embed(
+                title="✅ Bookmark Added!",
+                description=f"**{title}** has been saved to your bookmarks.",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="URL", value=url, inline=False)
+            if category:
+                embed.add_field(name="Category", value=category, inline=True)
+            await ctx.send(embed=embed)
+
+        elif args.startswith("remove "):
+            # Remove a bookmark
+            try:
+                bookmark_id = int(args[7:].strip())
+            except ValueError:
+                await ctx.send("❌ Please provide a valid bookmark ID number.")
+                return
+
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''DELETE FROM study_bookmarks
+                         WHERE id = ? AND user_id = ? AND guild_id = ?''',
+                     (bookmark_id, ctx.author.id, ctx.guild.id))
+            deleted = c.rowcount
+            conn.commit()
+            conn.close()
+
+            if deleted:
+                embed = discord.Embed(
+                    title="🗑️ Bookmark Removed",
+                    description=f"Bookmark #{bookmark_id} has been deleted.",
+                    color=discord.Color.red()
+                )
+                await ctx.send(embed=embed)
+            else:
+                await ctx.send("❌ Bookmark not found or you don't have permission to delete it.")
+
+        else:
+            embed = discord.Embed(
+                title="📚 Bookmark Commands",
+                description="Manage your study resources",
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="View Bookmarks",
+                value="`%study bookmarks`",
+                inline=False
+            )
+            embed.add_field(
+                name="Add Bookmark",
+                value="`%study bookmarks add <title> <url> [category]`",
+                inline=False
+            )
+            embed.add_field(
+                name="Remove Bookmark",
+                value="`%study bookmarks remove <id>`",
+                inline=False
+            )
+            await ctx.send(embed=embed)
+
+    else:
+        await ctx.send("❌ Invalid action! Use `%study` for help.")
+
+
 async def check_level_up(user, guild):
     user_data = get_user_data(user.id, guild.id)
     if not user_data:
@@ -1755,9 +2709,691 @@ async def profile_cmd(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 
+def generate_profile_card(user: discord.Member, user_data: Dict, guild: discord.Guild) -> BytesIO:
+    """Generate a profile card image based on the design specifications"""
+    import math
+    from collections import Counter
+    
+    # Image dimensions: Portrait orientation (8x11 inches at 150 DPI)
+    DPI = 150
+    CARD_WIDTH = int(8 * DPI)   # 1200 pixels (portrait width)
+    CARD_HEIGHT = int(11 * DPI) # 1650 pixels (portrait height)
+    
+    # Padding multiplier from user settings (default 3x = 1.2 inches base)
+    padding_multiplier = user_data.get('card_padding', 1.2) or 1.2
+    base_padding = 0.4  # Base padding in inches
+    
+    # Padding in inches, converted to pixels (3x default)
+    PADDING_LEFT = int(base_padding * padding_multiplier * DPI)
+    PADDING_RIGHT = int(base_padding * padding_multiplier * DPI)
+    PADDING_TOP = int(base_padding * padding_multiplier * DPI)
+    PADDING_BOTTOM = int(base_padding * padding_multiplier * DPI)
+    
+    # Content area
+    CONTENT_X = PADDING_LEFT
+    CONTENT_Y = PADDING_TOP
+    CONTENT_WIDTH = CARD_WIDTH - PADDING_LEFT - PADDING_RIGHT
+    CONTENT_HEIGHT = CARD_HEIGHT - PADDING_TOP - PADDING_BOTTOM
+    
+    # Default colors
+    DEFAULT_BG_COLOR = (128, 128, 128)  # Gray default
+    PROFILE_BOX_COLOR = (255, 0, 0)  # Red for profile picture
+    COUNTRY_BOX_COLOR = (118, 137, 131)  # #758983 default for country
+    GUILD_BOX_COLOR = (118, 137, 131)  # #758983 default for guild
+    DEFAULT_PROGRESS_BAR_BG = (84, 107, 81)  # #546b51 dark green (default)
+    DEFAULT_PROGRESS_BAR_FILL = (118, 137, 131)  # Ash green (default)
+    MULTIPLIER_BOX_COLOR = (84, 107, 81)  # #546b51 dark blue/green
+    MESSAGE_ICON_COLOR = (255, 255, 255)  # White
+    
+    # Helper function to extract dominant color from image
+    def get_dominant_color(img: Image.Image, k=3) -> tuple:
+        """Extract dominant color from image using k-means clustering approximation"""
+        try:
+            # Resize for faster processing
+            img_small = img.resize((100, 100), Image.Resampling.LANCZOS)
+            img_small = img_small.convert('RGB')
+            pixels = list(img_small.getdata())
+            
+            # Simple approach: get most common colors
+            color_counts = Counter(pixels)
+            # Get top color
+            dominant = color_counts.most_common(1)[0][0]
+            return dominant
+        except:
+            return DEFAULT_PROGRESS_BAR_FILL
+    
+    # Helper function to download image/GIF (extracts first frame for GIFs)
+    def download_image(url: str, size: tuple) -> Image.Image:
+        try:
+            response = requests.get(url, timeout=10, stream=True)
+            img_data = Image.open(BytesIO(response.content))
+            
+            # Handle GIFs - extract first frame
+            if hasattr(img_data, 'is_animated') and img_data.is_animated:
+                img_data.seek(0)  # Get first frame
+            
+            img_data = img_data.convert('RGB')
+            img_data = img_data.resize(size, Image.Resampling.LANCZOS)
+            return img_data
+        except:
+            return None
+    
+    # Get background color (use profile_card_bg_color, fallback to custom_color, default to gray)
+    bg_color_hex = user_data.get('profile_card_bg_color') or user_data.get('custom_color', '#808080')
+    if bg_color_hex.startswith('#'):
+        bg_color_hex = bg_color_hex[1:]
+    
+    try:
+        bg_r = int(bg_color_hex[0:2], 16)
+        bg_g = int(bg_color_hex[2:4], 16)
+        bg_b = int(bg_color_hex[4:6], 16)
+    except:
+        bg_r, bg_g, bg_b = DEFAULT_BG_COLOR
+    
+    # Calculate brightness for text color decision
+    bg_brightness = (bg_r * 299 + bg_g * 587 + bg_b * 114) / 1000
+    
+    # No default darkening (0%)
+    bg_color = (bg_r, bg_g, bg_b)
+    
+    # Determine text colors based on background brightness
+    # If background is very bright (white), use black text, otherwise white
+    is_light_bg = bg_brightness > 200
+    TEXT_COLOR = (0, 0, 0) if is_light_bg else (255, 255, 255)
+    TEXT_GRAY = (100, 100, 100) if is_light_bg else (180, 180, 180)  # About me text
+    
+    # Progress bar colors (will be updated if banner is set)
+    progress_bar_bg = DEFAULT_PROGRESS_BAR_BG
+    progress_bar_fill = DEFAULT_PROGRESS_BAR_FILL
+    
+    # Create base image
+    img = Image.new('RGB', (CARD_WIDTH, CARD_HEIGHT), bg_color)
+    draw = ImageDraw.Draw(img)
+    
+    # If background_url is set, try to overlay it (with user-defined darkening)
+    background_url = user_data.get('background_url')
+    banner_img = None
+    banner_brightness_value = user_data.get('banner_brightness', 0.0) or 0.0  # 0-100%
+    darken_factor = banner_brightness_value / 100.0  # Convert to 0.0-1.0
+    
+    if background_url:
+        try:
+            bg_img = download_image(background_url, (CARD_WIDTH, CARD_HEIGHT))
+            if bg_img:
+                banner_img = bg_img.copy()
+                # Calculate brightness from banner image
+                banner_brightness = sum(bg_img.convert('L').resize((10, 10)).getdata()) / 100
+                is_light_bg = banner_brightness > 200
+                TEXT_COLOR = (0, 0, 0) if is_light_bg else (255, 255, 255)
+                TEXT_GRAY = (100, 100, 100) if is_light_bg else (180, 180, 180)
+                
+                # Paste background image first
+                img.paste(bg_img, (0, 0))
+                # Apply user-defined darkening overlay (0-100%)
+                if darken_factor > 0:
+                    overlay = Image.new('RGB', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0))
+                    overlay_alpha = Image.new('L', (CARD_WIDTH, CARD_HEIGHT), int(255 * darken_factor))
+                    img = Image.composite(img, overlay, overlay_alpha)
+                draw = ImageDraw.Draw(img)
+                
+                # Extract dominant color from banner for progress bar
+                dominant_color = get_dominant_color(bg_img)
+                # Create a darker version for progress bar background
+                progress_bar_fill = dominant_color
+                # Darken the dominant color for the background
+                progress_bar_bg = tuple(max(0, int(c * 0.6)) for c in dominant_color)
+        except:
+            pass  # If background image fails, just use solid color
+    
+    # Try to load Anton font, fallback to default
+    # Note: To use Anton font, place Anton-Regular.ttf in the 'fonts' directory or root directory
+    # Download from: https://fonts.google.com/specimen/Anton
+    # Font sizes: Canva size 12 = ~16px, size 8 = ~11px (scaled for 150 DPI)
+    try:
+        font_paths = [
+            'fonts/Anton-Regular.ttf',
+            'Anton-Regular.ttf',
+            './fonts/Anton-Regular.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+            'C:/Windows/Fonts/arial.ttf',
+        ]
+        font_path_used = None
+        for path in font_paths:
+            try:
+                if os.path.exists(path):
+                    font_path_used = path
+                    break
+            except:
+                continue
+        
+        if font_path_used:
+            # Get user-defined font size (default 3x larger = 99px)
+            # If user hasn't set a custom size, use 3x default (99px)
+            custom_font_size = user_data.get('card_font_size')
+            if custom_font_size is None:
+                # Default: 3x larger than original (33px * 3 = 99px)
+                main_font_size = 99
+            else:
+                # User has set a custom size, use it directly (clamped 5-999)
+                main_font_size = int(max(5, min(999, custom_font_size)))
+            about_font_size = int(main_font_size * 0.73)  # About 73% of main size for about me
+            
+            title_font = ImageFont.truetype(font_path_used, main_font_size)
+            large_font = ImageFont.truetype(font_path_used, main_font_size)
+            medium_font = ImageFont.truetype(font_path_used, main_font_size)
+            small_font = ImageFont.truetype(font_path_used, main_font_size)
+            about_font = ImageFont.truetype(font_path_used, about_font_size)
+        else:
+            # Fallback to default font
+            title_font = ImageFont.load_default()
+            large_font = ImageFont.load_default()
+            medium_font = ImageFont.load_default()
+            small_font = ImageFont.load_default()
+            about_font = ImageFont.load_default()
+    except:
+        title_font = ImageFont.load_default()
+        large_font = ImageFont.load_default()
+        medium_font = ImageFont.load_default()
+        small_font = ImageFont.load_default()
+        about_font = ImageFont.load_default()
+    
+    # Draw profile picture box (red, large, rounded)
+    # Scale elements for new dimensions
+    scale_factor = CARD_WIDTH / 1000  # Scale from original 1000px width
+    pfp_size = int(140 * scale_factor)  # ~231px
+    pfp_x = CONTENT_X
+    pfp_y = CONTENT_Y
+    pfp_radius = int(20 * scale_factor)  # ~33px
+    
+    # Create rounded rectangle mask for profile picture
+    pfp_mask = Image.new('L', (pfp_size, pfp_size), 0)
+    pfp_mask_draw = ImageDraw.Draw(pfp_mask)
+    pfp_mask_draw.rounded_rectangle([(0, 0), (pfp_size, pfp_size)], radius=pfp_radius, fill=255)
+    
+    # Try to load profile picture (custom or default)
+    try:
+        custom_pfp_url = user_data.get('custom_pfp_url')
+        pfp_url = custom_pfp_url if custom_pfp_url else str(user.display_avatar.url)
+        pfp_img = download_image(pfp_url, (pfp_size, pfp_size))
+        if pfp_img:
+            img.paste(pfp_img, (pfp_x, pfp_y), pfp_mask)
+        else:
+            draw.rounded_rectangle([(pfp_x, pfp_y), (pfp_x + pfp_size, pfp_y + pfp_size)], 
+                                 radius=pfp_radius, fill=PROFILE_BOX_COLOR)
+    except:
+        draw.rounded_rectangle([(pfp_x, pfp_y), (pfp_x + pfp_size, pfp_y + pfp_size)], 
+                             radius=pfp_radius, fill=PROFILE_BOX_COLOR)
+    
+    # Draw country flag box (green, small, rounded)
+    flag_size = int(60 * scale_factor)  # ~99px
+    flag_x = pfp_x + pfp_size + int(25 * scale_factor)
+    flag_y = pfp_y
+    flag_radius = int(12 * scale_factor)  # ~20px
+    
+    # Check for country flag (not in DB yet, use default)
+    country_flag_url = user_data.get('country_flag_url')
+    if country_flag_url:
+        flag_img = download_image(country_flag_url, (flag_size, flag_size))
+        if flag_img:
+            flag_mask = Image.new('L', (flag_size, flag_size), 0)
+            flag_mask_draw = ImageDraw.Draw(flag_mask)
+            flag_mask_draw.rounded_rectangle([(0, 0), (flag_size, flag_size)], radius=flag_radius, fill=255)
+            img.paste(flag_img, (flag_x, flag_y), flag_mask)
+        else:
+            draw.rounded_rectangle([(flag_x, flag_y), (flag_x + flag_size, flag_y + flag_size)], 
+                                 radius=flag_radius, fill=COUNTRY_BOX_COLOR)
+    else:
+        draw.rounded_rectangle([(flag_x, flag_y), (flag_x + flag_size, flag_y + flag_size)], 
+                             radius=flag_radius, fill=COUNTRY_BOX_COLOR)
+    
+    # Draw guild logo box (blue, small, rounded)
+    guild_size = int(60 * scale_factor)  # ~99px
+    guild_x = flag_x + flag_size + int(15 * scale_factor)
+    guild_y = pfp_y
+    guild_radius = int(12 * scale_factor)  # ~20px
+    
+    # Check for guild logo
+    guild_icon_url = str(guild.icon.url) if guild.icon else None
+    if guild_icon_url:
+        guild_img = download_image(guild_icon_url, (guild_size, guild_size))
+        if guild_img:
+            guild_mask = Image.new('L', (guild_size, guild_size), 0)
+            guild_mask_draw = ImageDraw.Draw(guild_mask)
+            guild_mask_draw.rounded_rectangle([(0, 0), (guild_size, guild_size)], radius=guild_radius, fill=255)
+            img.paste(guild_img, (guild_x, guild_y), guild_mask)
+        else:
+            draw.rounded_rectangle([(guild_x, guild_y), (guild_x + guild_size, guild_y + guild_size)], 
+                                 radius=guild_radius, fill=GUILD_BOX_COLOR)
+    else:
+        draw.rounded_rectangle([(guild_x, guild_y), (guild_x + guild_size, guild_y + guild_size)], 
+                             radius=guild_radius, fill=GUILD_BOX_COLOR)
+    
+    # Draw level text (top left)
+    level = user_data.get('level', 0)
+    level_text = f"lvl {level}"
+    level_y = int(30 * scale_factor)
+    draw.text((CONTENT_X, level_y), level_text, fill=TEXT_COLOR, font=title_font)
+    
+    # Draw rank text (top right)
+    rank = get_user_rank(user.id, guild.id) or 0
+    rank_text = f"#{rank}" if rank > 0 else "#-"
+    rank_bbox = draw.textbbox((0, 0), rank_text, font=title_font)
+    rank_width = rank_bbox[2] - rank_bbox[0]
+    draw.text((CARD_WIDTH - rank_width - CONTENT_X, level_y), rank_text, fill=TEXT_COLOR, font=title_font)
+    
+    # Draw display name and username
+    display_name = user.display_name or "-"
+    username = user.name or "-"
+    
+    name_y = pfp_y + pfp_size + int(20 * scale_factor)
+    draw.text((pfp_x, name_y), display_name, fill=TEXT_COLOR, font=large_font)
+    draw.text((pfp_x, name_y + int(45 * scale_factor)), f"@{username}", fill=TEXT_GRAY, font=medium_font)
+    
+    # Calculate progress
+    current_level = user_data.get('level', 0)
+    next_level = current_level + 1
+    next_req = LevelSystem.get_level_requirements(next_level) if next_level <= 100 else None
+    
+    if next_req:
+        # Calculate progress percentage (average of all requirements)
+        words_progress = min(1.0, user_data.get('unique_words', 0) / max(1, next_req.get('words', 1)))
+        vc_progress = min(1.0, (user_data.get('vc_seconds', 0) / 60) / max(1, next_req.get('vc_minutes', 1)))
+        messages_progress = min(1.0, user_data.get('messages_sent', 0) / max(1, next_req.get('messages', 1)))
+        quests_progress = min(1.0, user_data.get('quests_completed', 0) / max(1, next_req.get('quests', 1)))
+        overall_progress = (words_progress + vc_progress + messages_progress + quests_progress) / 4.0
+    else:
+        overall_progress = 1.0
+    
+    # Draw progress bar
+    progress_y = name_y + int(100 * scale_factor)
+    progress_x = pfp_x
+    progress_width = int(700 * scale_factor)  # ~1155px
+    progress_height = int(35 * scale_factor)  # ~58px
+    progress_radius = int(10 * scale_factor)  # ~17px
+    
+    # Background bar (matches banner or default)
+    draw.rounded_rectangle([(progress_x, progress_y), (progress_x + progress_width, progress_y + progress_height)], 
+                         radius=progress_radius, fill=progress_bar_bg)
+    
+    # Filled bar (matches banner dominant color or default)
+    fill_width = int(progress_width * overall_progress)
+    if fill_width > 0:
+        draw.rounded_rectangle([(progress_x, progress_y), (progress_x + fill_width, progress_y + progress_height)], 
+                             radius=progress_radius, fill=progress_bar_fill)
+    
+    # Progress text (vertically centered)
+    progress_text_bbox = draw.textbbox((0, 0), "Progress", font=small_font)
+    progress_text_height = progress_text_bbox[3] - progress_text_bbox[1]
+    progress_text_y = progress_y + (progress_height - progress_text_height) // 2
+    draw.text((progress_x + int(15 * scale_factor), progress_text_y), "Progress", fill=TEXT_COLOR, font=small_font)
+    
+    # XP multiplier box
+    multiplier = user_data.get('xp_multiplier', 1.0)
+    # Calculate quest multipliers
+    daily_quests = user_data.get('daily_quests_completed', 0)
+    weekly_quests = user_data.get('weekly_quests_completed', 0)
+    quest_multiplier = 1.0
+    if daily_quests > 0:
+        quest_multiplier += 0.1
+    if weekly_quests > 0:
+        quest_multiplier += 0.25
+    total_multiplier = multiplier * quest_multiplier
+    
+    multiplier_text = f"{total_multiplier:.1f}x"
+    multiplier_box_width = int(90 * scale_factor)
+    multiplier_box_height = progress_height
+    multiplier_x = progress_x + progress_width + int(25 * scale_factor)
+    multiplier_y = progress_y
+    
+    draw.rounded_rectangle([(multiplier_x, multiplier_y), (multiplier_x + multiplier_box_width, multiplier_y + multiplier_box_height)], 
+                         radius=progress_radius, fill=MULTIPLIER_BOX_COLOR)
+    multiplier_bbox = draw.textbbox((0, 0), multiplier_text, font=small_font)
+    multiplier_text_width = multiplier_bbox[2] - multiplier_bbox[0]
+    multiplier_text_x = multiplier_x + (multiplier_box_width - multiplier_text_width) // 2
+    multiplier_text_y = multiplier_y + int(8 * scale_factor)
+    draw.text((multiplier_text_x, multiplier_text_y), multiplier_text, fill=TEXT_COLOR, font=small_font)
+    
+    # Draw stats section
+    stats_start_y = progress_y + progress_height + int(50 * scale_factor)
+    stats_x = pfp_x
+    stat_spacing = int(55 * scale_factor)
+    
+    stats_labels = ["XP", "words", "messages", "vc", "quests"]
+    
+    # Overall/lifetime stats (for middle column display)
+    overall_xp = user_data.get('xp', 0)
+    overall_words = user_data.get('lifetime_words', user_data.get('unique_words', 0))  # Use lifetime if available
+    overall_messages = user_data.get('messages_sent', 0)  # Current value (may be reset on level up)
+    overall_vc = user_data.get('vc_seconds', 0) // 60  # Current value (may be reset on level up)
+    overall_quests = user_data.get('quests_completed', 0)  # Current value (may be reset on level up)
+    
+    stats_values = [
+        f"{overall_xp:,}",
+        f"{overall_words:,}",
+        f"{overall_messages:,}",
+        f"{overall_vc:,}",
+        f"{overall_quests:,}"
+    ]
+    
+    # Current progress values (for right column - progress towards next level)
+    # Note: These represent progress since last level up
+    current_words = user_data.get('unique_words', 0)
+    current_messages = user_data.get('messages_sent', 0)
+    current_vc = user_data.get('vc_seconds', 0) // 60
+    current_quests = user_data.get('quests_completed', 0)
+    
+    # Requirements for next level
+    if next_req:
+        # Calculate XP requirement (based on level requirements)
+        xp_req = next_req.get('words', 0) * 10  # Approximate XP from words
+        req_words = next_req.get('words', 0)
+        req_messages = next_req.get('messages', 0)
+        req_vc = next_req.get('vc_minutes', 0)
+        req_quests = next_req.get('quests', 0)
+        
+        # Current progress towards requirements (capped at requirement)
+        # Note: These are the values since last level up (for progress tracking)
+        # For XP, we'll use a simple calculation based on words progress
+        progress_xp = min(overall_xp, xp_req) if xp_req > 0 else overall_xp
+        progress_words = min(current_words, req_words) if req_words > 0 else current_words
+        progress_messages = min(current_messages, req_messages) if req_messages > 0 else current_messages
+        progress_vc = min(current_vc, req_vc) if req_vc > 0 else current_vc
+        progress_quests = min(current_quests, req_quests) if req_quests > 0 else current_quests
+        
+        stats_requirements = [
+            (f"{progress_xp:,}", f"{xp_req:,}"),
+            (f"{progress_words:,}", f"{req_words:,}"),
+            (f"{progress_messages:,}", f"{req_messages:,}"),
+            (f"{progress_vc:,}", f"{req_vc:,}"),
+            (f"{progress_quests:,}", f"{req_quests:,}")
+        ]
+    else:
+        # Max level reached
+        stats_requirements = [("-", "-")] * 5
+    
+    for i, (label, value, (progress, req)) in enumerate(zip(stats_labels, stats_values, stats_requirements)):
+        y_pos = stats_start_y + (i * stat_spacing)
+        
+        # Label
+        draw.text((stats_x, y_pos), label, fill=TEXT_COLOR, font=small_font)
+        
+        # Value (overall stat)
+        value_x = stats_x + int(150 * scale_factor)
+        draw.text((value_x, y_pos), value, fill=TEXT_COLOR, font=small_font)
+        
+        # Separator and requirement (progress / requirement)
+        req_x = value_x + int(150 * scale_factor)
+        draw.text((req_x, y_pos), "]", fill=TEXT_COLOR, font=small_font)
+        req_text = f"{progress} / {req}"
+        draw.text((req_x + int(25 * scale_factor), y_pos), req_text, fill=TEXT_COLOR, font=small_font)
+    
+    # Draw "About me" section
+    about_y = stats_start_y + (len(stats_labels) * stat_spacing) + int(40 * scale_factor)
+    about_x = pfp_x
+    
+    # Message icon (white/black rounded box based on background)
+    icon_size = int(35 * scale_factor)
+    icon_radius = int(6 * scale_factor)
+    icon_color = (0, 0, 0) if is_light_bg else (255, 255, 255)
+    draw.rounded_rectangle([(about_x, about_y), (about_x + icon_size, about_y + icon_size)], 
+                         radius=icon_radius, fill=icon_color)
+    
+    # "Abouts me" title
+    about_title_x = about_x + icon_size + int(12 * scale_factor)
+    draw.text((about_title_x, about_y), "Abouts me", fill=TEXT_COLOR, font=medium_font)
+    
+    # About me text
+    about_text = user_data.get('about_me', '') or ''
+    if about_text:
+        # Wrap text if too long
+        max_width = CONTENT_WIDTH - int(40 * scale_factor)
+        words = about_text.split()
+        lines = []
+        current_line = []
+        current_width = 0
+        
+        for word in words:
+            word_bbox = draw.textbbox((0, 0), word + " ", font=about_font)
+            word_width = word_bbox[2] - word_bbox[0]
+            if current_width + word_width > max_width and current_line:
+                lines.append(" ".join(current_line))
+                current_line = [word]
+                current_width = word_width
+            else:
+                current_line.append(word)
+                current_width += word_width
+        
+        if current_line:
+            lines.append(" ".join(current_line))
+        
+        about_text_y = about_y + int(40 * scale_factor)
+        line_height = int(28 * scale_factor)
+        for line in lines[:3]:  # Limit to 3 lines
+            draw.text((about_x, about_text_y), line, fill=TEXT_GRAY, font=about_font)
+            about_text_y += line_height
+    
+    # Convert to bytes
+    img_bytes = BytesIO()
+    img.save(img_bytes, format='PNG')
+    img_bytes.seek(0)
+    return img_bytes
+
+
 @bot.command(name='me')
-async def me_cmd(ctx):
-    await profile_cmd(ctx, None)
+async def me_cmd(ctx, action: str = None, *, value: str = None):
+    """Profile card commands. Use: %me [banner <url>|color <hex>|about <text>] or just %me [@user] to view"""
+    
+    # Handle subcommands first
+    if action == 'banner':
+        if not value:
+            await ctx.send("❌ Please provide an image URL: `%me banner <image_url>`")
+            return
+        
+        if not value.startswith(('http://', 'https://')):
+            await ctx.send("❌ Please provide a valid image URL!")
+            return
+        
+        # Update background_url for profile card
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''UPDATE users SET background_url = ? WHERE user_id = ? AND guild_id = ?''',
+                  (value, ctx.author.id, ctx.guild.id))
+        conn.commit()
+        conn.close()
+        
+        embed = discord.Embed(title="✅ Profile Card Banner Updated!",
+                              description="Your profile card background image has been set.",
+                              color=discord.Color.green())
+        embed.set_image(url=value)
+        await ctx.send(embed=embed)
+        return
+    
+    elif action == 'color':
+        if not value:
+            await ctx.send("❌ Please provide a hex color: `%me color #FF5733`")
+            return
+        
+        # Validate hex color
+        hex_color = value.strip()
+        if not hex_color.startswith('#'):
+            hex_color = '#' + hex_color
+        
+        if not re.match(r'^#[0-9A-Fa-f]{6}$', hex_color):
+            await ctx.send("❌ Invalid hex color! Use format: `#FF5733` or `FF5733`")
+            return
+        
+        # Update profile_card_bg_color
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''UPDATE users SET profile_card_bg_color = ? WHERE user_id = ? AND guild_id = ?''',
+                  (hex_color, ctx.author.id, ctx.guild.id))
+        conn.commit()
+        conn.close()
+        
+        embed = discord.Embed(title="✅ Profile Card Color Updated!",
+                              description=f"Your profile card background color has been set to `{hex_color}`.",
+                              color=discord.Color.from_str(hex_color))
+        await ctx.send(embed=embed)
+        return
+    
+    elif action == 'about':
+        if value is None:
+            await ctx.send("❌ Please provide your about me text: `%me about <your text>`")
+            return
+        
+        # Update about_me
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''UPDATE users SET about_me = ? WHERE user_id = ? AND guild_id = ?''',
+                  (value, ctx.author.id, ctx.guild.id))
+        conn.commit()
+        conn.close()
+        
+        embed = discord.Embed(title="✅ About Me Updated!",
+                              description="Your profile card about me section has been updated.",
+                              color=discord.Color.green())
+        await ctx.send(embed=embed)
+        return
+    
+    elif action == 'brightness':
+        if not value:
+            await ctx.send("❌ Please provide a brightness value (0-100): `%me brightness 20`")
+            return
+        
+        try:
+            brightness = float(value)
+            if brightness < 0 or brightness > 100:
+                await ctx.send("❌ Brightness must be between 0 and 100!")
+                return
+            
+            # Update banner_brightness
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''UPDATE users SET banner_brightness = ? WHERE user_id = ? AND guild_id = ?''',
+                      (brightness, ctx.author.id, ctx.guild.id))
+            conn.commit()
+            conn.close()
+            
+            embed = discord.Embed(title="✅ Banner Brightness Updated!",
+                                  description=f"Your banner darkness has been set to {brightness}%.",
+                                  color=discord.Color.green())
+            await ctx.send(embed=embed)
+            return
+        except ValueError:
+            await ctx.send("❌ Please provide a valid number between 0 and 100!")
+            return
+    
+    elif action == 'padding':
+        if not value:
+            await ctx.send("❌ Please provide a padding multiplier: `%me padding 1.5`")
+            return
+        
+        try:
+            padding = float(value)
+            if padding < 0.1 or padding > 10:
+                await ctx.send("❌ Padding multiplier must be between 0.1 and 10!")
+                return
+            
+            # Update card_padding
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''UPDATE users SET card_padding = ? WHERE user_id = ? AND guild_id = ?''',
+                      (padding, ctx.author.id, ctx.guild.id))
+            conn.commit()
+            conn.close()
+            
+            embed = discord.Embed(title="✅ Card Padding Updated!",
+                                  description=f"Your card padding has been set to {padding}x.",
+                                  color=discord.Color.green())
+            await ctx.send(embed=embed)
+            return
+        except ValueError:
+            await ctx.send("❌ Please provide a valid number!")
+            return
+    
+    elif action == 'fontsize':
+        if not value:
+            await ctx.send("❌ Please provide a font size (5-999): `%me fontsize 50`")
+            return
+        
+        try:
+            font_size = float(value)
+            if font_size < 5 or font_size > 999:
+                await ctx.send("❌ Font size must be between 5 and 999!")
+                return
+            
+            # Update card_font_size
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''UPDATE users SET card_font_size = ? WHERE user_id = ? AND guild_id = ?''',
+                      (font_size, ctx.author.id, ctx.guild.id))
+            conn.commit()
+            conn.close()
+            
+            embed = discord.Embed(title="✅ Font Size Updated!",
+                                  description=f"Your card font size has been set to {font_size}.",
+                                  color=discord.Color.green())
+            await ctx.send(embed=embed)
+            return
+        except ValueError:
+            await ctx.send("❌ Please provide a valid number between 5 and 999!")
+            return
+    
+    elif action == 'pfp':
+        if not value:
+            await ctx.send("❌ Please provide an image URL: `%me pfp <image_url>`")
+            return
+        
+        if not value.startswith(('http://', 'https://')):
+            await ctx.send("❌ Please provide a valid image URL!")
+            return
+        
+        # Update custom_pfp_url
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''UPDATE users SET custom_pfp_url = ? WHERE user_id = ? AND guild_id = ?''',
+                  (value, ctx.author.id, ctx.guild.id))
+        conn.commit()
+        conn.close()
+        
+        embed = discord.Embed(title="✅ Profile Picture Updated!",
+                              description="Your profile card picture has been set.",
+                              color=discord.Color.green())
+        embed.set_image(url=value)
+        await ctx.send(embed=embed)
+        return
+    
+    # Default: Show profile card
+    # Check if a member was mentioned in the message
+    target = ctx.author
+    if ctx.message.mentions:
+        target = ctx.message.mentions[0]
+    elif action and action not in ['banner', 'color', 'about', 'brightness', 'padding', 'fontsize', 'pfp']:
+        # Try to parse action as member mention
+        try:
+            target = await commands.MemberConverter().convert(ctx, action)
+        except:
+            target = ctx.author
+    
+    # Get target's data
+    target_data = get_user_data(target.id, ctx.guild.id)
+    if not target_data:
+        embed = discord.Embed(
+            title=f"{target.display_name}'s Profile",
+            description="No data yet! Start chatting to begin your quest.",
+            color=discord.Color.blurple())
+        await ctx.send(embed=embed)
+        return
+    
+    # Generate profile card
+    try:
+        card_image = generate_profile_card(target, target_data, ctx.guild)
+        file = discord.File(card_image, filename='profile_card.png')
+        await ctx.send(file=file)
+    except Exception as e:
+        # Fallback to embed if image generation fails
+        await ctx.send(f"❌ Error generating profile card: {str(e)}")
+        await profile_cmd(ctx, target if target != ctx.author else None)
 
 
 @bot.command(name='vctest')
@@ -2077,7 +3713,15 @@ async def help_cmd(ctx):
         color=discord.Color.blurple())
 
     commands_list = {
-        "%profile [user]": "View your or someone else's profile",
+        "%me [@user]": "View your profile card (image)",
+        "%me banner <url>": "Set profile card background image",
+        "%me color <hex>": "Set profile card background color",
+        "%me brightness <0-100>": "Adjust banner darkness (0% = no darkening)",
+        "%me padding <multiplier>": "Adjust card padding (default: 1.2x)",
+        "%me fontsize <5-999>": "Adjust card font size (default: 33)",
+        "%me pfp <url>": "Set custom profile picture for card",
+        "%me about <text>": "Set your about me text",
+        "%profile [user]": "View your or someone else's profile (embed)",
         "%quests [type] [page]": "View available quests (daily/weekly/achievement/special)",
         "%claim <quest_id>": "Manually claim quest reward (100% XP)",
         "%claimall": "Claim all completed quests at once (85% XP, 15% fee)",
@@ -2085,12 +3729,12 @@ async def help_cmd(ctx):
         "%questprogress <quest_id>": "Check progress on a specific quest",
         "%vctest": "Test your VC time tracking",
         "%debug": "Check your current stats and progress",
-        "%banner <url>": "Set profile banner (Level 1+)",
-        "%color <hex>": "Change profile color",
-        "%leaderboard [category] [page]":
-        "View leaderboards (overall/words/vc/quests/xp)",
+        "%banner <url>": "Set profile banner for embed (Level 1+)",
+        "%color <hex>": "Change profile color for embed",
+        "%leaderboard [category] [page]": "View leaderboards (overall/words/vc/quests/xp)",
         "%version": "Check bot version and changelog",
-        "%guide": "Learn how the bot works"
+        "%guide": "Learn how the bot works",
+        "%admin help": "View admin-only commands"
     }
 
     embed.add_field(
@@ -2159,9 +3803,63 @@ async def guide_cmd(ctx):
     • Level 1: Unlock banner
     • Custom colors anytime
     • Show off your progress!
+    
+    **🎨 Profile Card Commands (`%me`)**
+    • `%me` - View your profile card (beautiful image!)
+    • `%me banner <url>` - Set background image/GIF
+    • `%me color <hex>` - Set background color
+    • `%me brightness <0-100>` - Adjust banner darkness (0% = original image)
+    • `%me padding <multiplier>` - Adjust card padding (default: 1.2x)
+    • `%me fontsize <5-999>` - Adjust font size (default: 33)
+    • `%me pfp <url>` - Set custom profile picture
+    • `%me about <text>` - Set your about me text
+    
+    **💡 Tips:**
+    • Profile cards are portrait-oriented (8x11 inches)
+    • Progress bar color matches your banner automatically
+    • Text color adapts to background brightness
+    • All settings are separate from embed profile!
     """
 
     embed.description = guide_text
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='admin')
+async def admin_cmd(ctx, action: str = None):
+    """Admin commands help"""
+    if action != 'help':
+        await ctx.send("❌ Use `%admin help` to view admin commands.")
+        return
+    
+    # Check if user has administrator permissions
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ You need administrator permissions to view this!")
+        return
+    
+    embed = discord.Embed(
+        title="🔐 Admin Commands",
+        description="Commands available only to administrators",
+        color=discord.Color.red())
+    
+    admin_commands = {
+        "%synchistory [user]": "Sync message history for a user (admin only)",
+        "%forcevc <user> <seconds>": "Force add VC time to a user (admin only)",
+        "%forcelevel <user> <level>": "Force set a user's level (admin only)",
+        "%forcexp <user> <amount>": "Force add XP to a user (admin only)",
+        "%forcewords <user> <amount>": "Force add words to a user (admin only)",
+        "%forcemessages <user> <amount>": "Force add messages to a user (admin only)",
+        "%forcequests <user> <amount>": "Force add quests completed to a user (admin only)",
+        "%trivia <action>": "Manage trivia questions and sessions (admin only)",
+        "%testweekly [user]": "Test weekly quest reset (admin only)",
+        "%testlevel [user]": "Test leveling system calculations (admin only)",
+        "%testall [user]": "Run all tracker tests (admin only)",
+    }
+    
+    for cmd, desc in admin_commands.items():
+        embed.add_field(name=cmd, value=desc, inline=False)
+    
+    embed.set_footer(text="⚠️ Use these commands responsibly!")
     await ctx.send(embed=embed)
 
 
@@ -3596,10 +5294,19 @@ async def on_message(message):
     # Update daily and weekly quest stats
     is_reply = 1 if message.reference else 0
     # Use unique_words for quest progress reporting, but cap for XP was applied above
-    update_daily_stats(message.author.id, message.guild.id, 
-                      messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0), replies=is_reply)
+    # Update study session activity if user has active session
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''UPDATE study_sessions SET last_activity = ?
+                 WHERE user_id = ? AND guild_id = ?''',
+              (datetime.datetime.now().isoformat(), message.author.id, message.guild.id))
+    conn.commit()
+    conn.close()
+
+    update_daily_stats(message.author.id, message.guild.id,
+                       messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0), replies=is_reply)
     update_weekly_stats(message.author.id, message.guild.id,
-                       messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0))
+                        messages=1, words=(len(set(re.findall(r'\b[a-zA-Z]{2,}\b', re.sub(r'http\S+', '', message.content or '').lower()))) if message.content else 0))
     
     # Check for expired unclaimed quests and auto-collect at 10% SILENTLY
     from quest_system import collect_expired_quests
