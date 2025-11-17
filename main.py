@@ -416,242 +416,7 @@ except Exception as e:
     else:
         print("❌ No backup files found")
 
-    # Version 10: Add study system tables
-    if current_version < 10:
-        print("📚 Adding study system tables...")
 
-        # Study sessions table (active sessions)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
-                      (user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                       start_time TEXT, last_activity TEXT,
-                       PRIMARY KEY (user_id, guild_id))''')
-
-        # Study history table (completed sessions)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_history
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                       start_time TEXT, end_time TEXT, actual_duration INTEGER,
-                       completed INTEGER DEFAULT 0)''')
-
-        # Study answers table (for MCQ practice)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_answers
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       question_number INTEGER, answer TEXT, is_correct INTEGER,
-                       timestamp TEXT)''')
-
-        # Study bookmarks table
-        c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER,
-                       title TEXT, url TEXT, category TEXT,
-                       created_at TEXT)''')
-
-        # Indexes for study tables
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
-                      ON study_sessions(user_id, guild_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
-                      ON study_history(user_id, guild_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
-                      ON study_answers(user_id, guild_id, session_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
-                      ON study_bookmarks(user_id, guild_id)''')
-
-        print("✅ Study system tables created successfully")
-
-    # Insert/update version info
-    version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
-    c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
-                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
-
-    conn.commit()
-    conn.close()
-    print("✅ Database initialized/updated successfully")
-
-
-# Initialize database with safety checks
-try:
-    init_db()
-    init_quest_tables()
-    print("✅ Quest system initialized")
-except Exception as e:
-    print(f"❌ Database initialization error: {e}")
-    # Try to restore from most recent backup
-    import os
-    import glob
-
-    backup_files = glob.glob('backups/questuza_backup_*.db')
-    if backup_files:
-        latest_backup = max(backup_files, key=os.path.getctime)
-        try:
-            import shutil
-            shutil.copy2(latest_backup, 'questuza.db')
-            print(f"✅ Restored from backup: {latest_backup}")
-            init_db()  # Try initialization again
-        except Exception as restore_error:
-            print(f"❌ Backup restoration failed: {restore_error}")
-    else:
-        print("❌ No backup files found")
-
-    # Version 10: Add study system tables
-    if current_version < 10:
-        print("📚 Adding study system tables...")
-
-        # Study sessions table (active sessions)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
-                      (user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                       start_time TEXT, last_activity TEXT,
-                       PRIMARY KEY (user_id, guild_id))''')
-
-        # Study history table (completed sessions)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_history
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                       start_time TEXT, end_time TEXT, actual_duration INTEGER,
-                       completed INTEGER DEFAULT 0)''')
-
-        # Study answers table (for MCQ practice)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_answers
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       question_number INTEGER, answer TEXT, is_correct INTEGER,
-                       timestamp TEXT)''')
-
-        # Study bookmarks table
-        c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER,
-                       title TEXT, url TEXT, category TEXT,
-                       created_at TEXT)''')
-
-        # Indexes for study tables
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
-                      ON study_sessions(user_id, guild_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
-                      ON study_history(user_id, guild_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
-                      ON study_answers(user_id, guild_id, session_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
-                      ON study_bookmarks(user_id, guild_id)''')
-
-        print("✅ Study system tables created successfully")
-
-    # Insert/update version info
-    version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
-    c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
-                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
-
-    conn.commit()
-    conn.close()
-    print("✅ Database initialized/updated successfully")
-
-
-# Initialize database with safety checks
-try:
-    init_db()
-    init_quest_tables()
-    print("✅ Quest system initialized")
-except Exception as e:
-    print(f"❌ Database initialization error: {e}")
-    # Try to restore from most recent backup
-    import os
-    import glob
-
-    backup_files = glob.glob('backups/questuza_backup_*.db')
-    if backup_files:
-        latest_backup = max(backup_files, key=os.path.getctime)
-        try:
-            import shutil
-            shutil.copy2(latest_backup, 'questuza.db')
-            print(f"✅ Restored from backup: {latest_backup}")
-            init_db()  # Try initialization again
-        except Exception as restore_error:
-            print(f"❌ Backup restoration failed: {restore_error}")
-    else:
-        print("❌ No backup files found")
-
-    # Version 10: Add study system tables
-    if current_version < 10:
-        print("📚 Adding study system tables...")
-
-        # Study sessions table (active sessions)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
-                      (user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                       start_time TEXT, last_activity TEXT,
-                       PRIMARY KEY (user_id, guild_id))''')
-
-        # Study history table (completed sessions)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_history
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                       start_time TEXT, end_time TEXT, actual_duration INTEGER,
-                       completed INTEGER DEFAULT 0)''')
-
-        # Study answers table (for MCQ practice)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_answers
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       question_number INTEGER, answer TEXT, is_correct INTEGER,
-                       timestamp TEXT)''')
-
-        # Study bookmarks table
-        c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER,
-                       title TEXT, url TEXT, category TEXT,
-                       created_at TEXT)''')
-
-        # Indexes for study tables
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
-                      ON study_sessions(user_id, guild_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
-                      ON study_history(user_id, guild_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
-                      ON study_answers(user_id, guild_id, session_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
-                      ON study_bookmarks(user_id, guild_id)''')
-
-        print("✅ Study system tables created successfully")
-
-    # Insert/update version info
-    version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
-    c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
-                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
-
-    conn.commit()
-    conn.close()
-    print("✅ Database initialized/updated successfully")
-
-
-# Initialize database with safety checks
-try:
-    init_db()
-    init_quest_tables()
-    print("✅ Quest system initialized")
-except Exception as e:
-    print(f"❌ Database initialization error: {e}")
-    # Try to restore from most recent backup
-    import os
-    import glob
-
-    backup_files = glob.glob('backups/questuza_backup_*.db')
-    if backup_files:
-        latest_backup = max(backup_files, key=os.path.getctime)
-        try:
-            import shutil
-            shutil.copy2(latest_backup, 'questuza.db')
-            print(f"✅ Restored from backup: {latest_backup}")
-            init_db()  # Try initialization again
-        except Exception as restore_error:
-            print(f"❌ Backup restoration failed: {restore_error}")
-    else:
-        print("❌ No backup files found")
 
 
 # Leveling configuration
@@ -2460,7 +2225,7 @@ async def trivia_cmd(ctx, action: str = None, *, args: str = None):
 
 
 # Study system commands
-@bot.command(name='study')
+@bot.group(name='study', invoke_without_command=True)
 async def study_cmd(ctx, action: str = None, *, args: str = None):
     """Study session management - Usage: %study <start|stop|status|bookmarks> [args]"""
 
@@ -6160,117 +5925,65 @@ async def reset_stats_cmd(ctx, member: discord.Member, stat_type: str = "all"):
     await ctx.send(embed=embed)
 
 
-# Study system commands — safe registration
-if 'study' not in bot.all_commands:
-    @bot.group(name='study', invoke_without_command=True)
-    async def study_group(ctx):
-        """Study system commands for PDF-based learning and MCQ practice"""
-        embed = discord.Embed(
-            title="📚 Study System",
-            description="Commands for managing study sessions, PDFs, and answer processing",
-            color=discord.Color.blue()
-        )
-        embed.add_field(
-            name="Session Management",
-            value="`%study start [type] [duration]` - Begin a study session\n"
-                  "`%study stop` - End current session\n"
-                  "`%study status` - Check session progress\n"
-                  "`%study history [page]` - View past study sessions",
-            inline=False
-        )
-        embed.add_field(
-            name="Test Mode",
-            value="`%study start test <minutes>` - Start timed MCQ test\n"
-                  "`%study testsummary [session_id]` - View test results",
-            inline=False
-        )
-        embed.add_field(
-            name="PDF Tools",
-            value="`%study pdf <url> [page]` - Display PDF page as image\n"
-                  "`%study answers <url> [pattern]` - Process answer key from PDF",
-            inline=False
-        )
-        embed.add_field(
-            name="Configuration",
-            value="`%study patterns` - Configure answer recognition patterns\n"
-                  "`%study bookmarks` - Manage study bookmarks",
-            inline=False
-        )
-        embed.add_field(
-            name="Analytics & History",
-            value="`%study analytics [period]` - View study statistics\n"
-                  "`%study history [page]` - Browse study session history\n"
-                  "`%study trends [period]` - View study progress trends\n"
-                  "`%study leaderboard [metric] [period]` - View study leaderboards\n"
-                  "`%study export [format]` - Export your study data",
-            inline=False
-        )
-        await ctx.send(embed=embed)
+# Study system commands - duplicate removed
 
-    @study_group.command(name='start')
-    async def study_start(ctx, session_type: str = None, duration: int = None):
-        """Start a new study session - Usage: %study start [type] [duration_minutes]
-
-        Types: practice, test, reading, other
-        For tests: %study start test <minutes>
-        For practice: %study start practice
-        """
+# Duplicate study commands removed
 
 
-    @study_group.command(name='stop')
-    async def study_stop(ctx):
-        """Stop the current study session"""
-        conn = get_db_connection()
-        c = conn.cursor()
+@study_cmd.command(name='stop')
+async def study_stop(ctx):
+    """Stop the current study session"""
+    conn = get_db_connection()
+    c = conn.cursor()
 
-        # Get active session
-        c.execute('''SELECT session_id, start_time, intended_duration, study_type, subject
-                     FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
-                  (ctx.author.id, ctx.guild.id))
-        session_data = c.fetchone()
+    # Get active session
+    c.execute('''SELECT session_id, start_time, intended_duration, study_type, subject
+                  FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+              (ctx.author.id, ctx.guild.id))
+    session_data = c.fetchone()
 
-        if not session_data:
-            await ctx.send("❌ You don't have an active study session!")
-            conn.close()
-            return
+    if not session_data:
+        await ctx.send("❌ You don't have an active study session!")
+        conn.close()
+        return
 
         session_id, start_time_str, intended_duration, study_type, subject = session_data
         start_time = datetime.datetime.fromisoformat(start_time_str)
         actual_duration = int((datetime.datetime.now() - start_time).total_seconds())
-
+    
         # Move to history
         c.execute('''INSERT INTO study_history
-                     (user_id, guild_id, session_id, study_type, subject, mood,
-                      intended_duration, start_time, end_time, actual_duration, completed)
-                     SELECT user_id, guild_id, session_id, study_type, subject, mood,
-                            intended_duration, start_time, ?, ?, 1
-                     FROM study_sessions
-                     WHERE user_id = ? AND guild_id = ?''',
+                      (user_id, guild_id, session_id, study_type, subject, mood,
+                       intended_duration, start_time, end_time, actual_duration, completed)
+                      SELECT user_id, guild_id, session_id, study_type, subject, mood,
+                             intended_duration, start_time, ?, ?, 1
+                      FROM study_sessions
+                      WHERE user_id = ? AND guild_id = ?''',
                   (datetime.datetime.now().isoformat(), actual_duration, ctx.author.id, ctx.guild.id))
-
+    
         # Remove from active sessions
         c.execute('''DELETE FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
                   (ctx.author.id, ctx.guild.id))
-
+    
         conn.commit()
         conn.close()
 
-        # Calculate duration display
-        hours = actual_duration // 3600
-        minutes = (actual_duration % 3600) // 60
-        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+    # Calculate duration display
+    hours = actual_duration // 3600
+    minutes = (actual_duration % 3600) // 60
+    duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-        embed = discord.Embed(
-            title="✅ Study Session Ended",
-            description=f"**{study_type}** session completed!",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="Subject", value=subject or "Not specified", inline=True)
-        embed.add_field(name="Duration", value=duration_str, inline=True)
-        embed.add_field(name="Planned", value=f"{intended_duration} minutes", inline=True)
-await ctx.send(embed=embed)
+    embed = discord.Embed(
+        title="✅ Study Session Ended",
+        description=f"**{study_type}** session completed!",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="Subject", value=subject or "Not specified", inline=True)
+    embed.add_field(name="Duration", value=duration_str, inline=True)
+    embed.add_field(name="Planned", value=f"{intended_duration} minutes", inline=True)
+    await ctx.send(embed=embed)
 
-@study_group.command(name='status')
+@study_cmd.command(name='status')
 async def study_status(ctx):
     """Check current study session status"""
     conn = get_db_connection()
@@ -6340,7 +6053,7 @@ async def study_status(ctx):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='pdf')
+@study_cmd.command(name='pdf')
 async def study_pdf(ctx, url: str, page: int = 1):
     """Display a PDF page as an image - Usage: %study pdf <url> [page]"""
     # Validate URL
@@ -6399,7 +6112,7 @@ async def study_pdf(ctx, url: str, page: int = 1):
         await status_msg.edit(embed=embed)
 
 
-@study_group.command(name='answers')
+@study_cmd.command(name='answers')
 async def study_answers(ctx, url: str, pattern: str = None):
     """Process answer key from PDF - Usage: %study answers <url> [pattern]"""
     # Validate URL
@@ -6495,7 +6208,7 @@ async def study_answers(ctx, url: str, pattern: str = None):
         await status_msg.edit(embed=embed)
 
 
-@study_group.command(name='patterns')
+@study_cmd.command(name='patterns')
 async def study_patterns(ctx, action: str = "list", *, pattern: str = None):
     """Configure answer recognition patterns - Usage: %study patterns [list/add/remove] [pattern]"""
     if action == "list":
@@ -6554,7 +6267,7 @@ async def study_patterns(ctx, action: str = "list", *, pattern: str = None):
         await ctx.send("❌ Invalid action! Use: `list`, `add <pattern>`, or `remove <pattern>`")
 
 
-@study_group.command(name='bookmarks')
+@study_cmd.command(name='bookmarks')
 async def study_bookmarks(ctx, action: str = "list", *, args: str = None):
     """Manage study bookmarks - Usage: %study bookmarks [list/add/remove] [title] [url]"""
     conn = get_db_connection()
@@ -6661,7 +6374,7 @@ async def study_bookmarks(ctx, action: str = "list", *, args: str = None):
         await ctx.send("❌ Invalid action! Use: `list`, `add <title> <url> [category]`, or `remove <title>`")
 
 
-@study_group.command(name='analytics')
+@study_cmd.command(name='analytics')
 async def study_analytics(ctx, period: str = "all"):
     """View study analytics and statistics - Usage: %study analytics [week/month/all]"""
     conn = get_db_connection()
@@ -6831,7 +6544,7 @@ async def study_analytics(ctx, period: str = "all"):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='leaderboard')
+@study_cmd.command(name='leaderboard')
 async def study_leaderboard(ctx, metric: str = "time", period: str = "all"):
     """View study leaderboards - Usage: %study leaderboard [metric] [period]
 
@@ -7067,7 +6780,7 @@ async def study_leaderboard(ctx, metric: str = "time", period: str = "all"):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='export')
+@study_cmd.command(name='export')
 async def study_export(ctx, format_type: str = "summary"):
     """Export your study data - Usage: %study export [format]
 
@@ -7260,7 +6973,7 @@ async def study_export(ctx, format_type: str = "summary"):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='history')
+@study_cmd.command(name='history')
 async def study_history(ctx, page: int = 1, session_type: str = "all"):
     """View detailed study session history with pagination - Usage: %study history [page] [type]"""
     if page < 1:
@@ -7370,7 +7083,7 @@ async def study_history(ctx, page: int = 1, session_type: str = "all"):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='sessiondetails')
+@study_cmd.command(name='sessiondetails')
 async def study_session_details(ctx, session_id: str):
     """View detailed information about a specific study session - Usage: %study sessiondetails <session_id>"""
     conn = get_db_connection()
@@ -7445,7 +7158,7 @@ async def study_session_details(ctx, session_id: str):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='trends')
+@study_cmd.command(name='trends')
 async def study_trends(ctx, period: str = "month"):
     """View study trends and progress over time - Usage: %study trends [week/month/year]"""
     if period not in ['week', 'month', 'year']:
@@ -7564,7 +7277,7 @@ async def study_trends(ctx, period: str = "month"):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='history')
+@study_cmd.command(name='history')
 async def study_history(ctx, page: int = 1):
     """View your study session history - Usage: %study history [page]"""
     if page < 1:
@@ -7648,7 +7361,7 @@ async def study_history(ctx, page: int = 1):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='history')
+@study_cmd.command(name='history')
 async def study_history(ctx, page: int = 1):
     """View your study session history - Usage: %study history [page]"""
     if page < 1:
@@ -7731,7 +7444,7 @@ async def study_history(ctx, page: int = 1):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='leaderboard')
+@study_cmd.command(name='leaderboard')
 async def study_leaderboard(ctx, category: str = "time", period: str = "all", page: int = 1):
     """View study leaderboards - Usage: %study leaderboard [time/accuracy/sessions/streak] [week/month/all] [page]"""
 
@@ -7969,7 +7682,7 @@ async def study_leaderboard(ctx, category: str = "time", period: str = "all", pa
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='export')
+@study_cmd.command(name='export')
 async def study_export(ctx, data_type: str = "all"):
     """Export your study data as JSON - Usage: %study export [all/sessions/answers/bookmarks]"""
     import json
@@ -8069,7 +7782,7 @@ async def study_export(ctx, data_type: str = "all"):
         await ctx.send(f"❌ Error exporting data: {str(e)}")
 
 
-@study_group.command(name='history')
+@study_cmd.command(name='history')
 async def study_history(ctx, page: int = 1, period: str = "all"):
     """View detailed study session history - Usage: %study history [page] [week/month/all]"""
     conn = get_db_connection()
@@ -8185,7 +7898,7 @@ async def study_history(ctx, page: int = 1, period: str = "all"):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='history')
+@study_cmd.command(name='history')
 async def study_history(ctx, page: int = 1):
     """View detailed study session history with pagination - Usage: %study history [page]"""
     if page < 1:
@@ -8294,7 +8007,7 @@ async def study_history(ctx, page: int = 1):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='testsummary')
+@study_cmd.command(name='testsummary')
 async def study_test_summary(ctx, session_id: str = None):
     """View detailed summary of a completed test - Usage: %study testsummary [session_id]"""
     conn = get_db_connection()
@@ -8391,7 +8104,7 @@ async def study_test_summary(ctx, session_id: str = None):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='trends')
+@study_cmd.command(name='trends')
 async def study_trends(ctx, period: str = "month"):
     """View study progress trends - Usage: %study trends [week/month/3months/all]"""
     if period not in ['week', 'month', '3months', 'all']:
@@ -8567,7 +8280,7 @@ async def study_trends(ctx, period: str = "month"):
     await ctx.send(embed=embed)
 
 
-@study_group.command(name='leaderboard', aliases=['lb'])
+@study_cmd.command(name='leaderboard', aliases=['lb'])
 async def study_leaderboard(ctx, category: str = "time", page: int = 1):
     """View study leaderboards - Usage: %study leaderboard [time/sessions/accuracy/tests] [page]"""
     if page < 1:
