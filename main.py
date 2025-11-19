@@ -318,11 +318,7 @@ def init_db():
             ('card_font_size', 'REAL DEFAULT 33.0'),  # Font size multiplier
             ('custom_pfp_url', 'TEXT'),  # Custom profile picture URL
         ]
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> 779a7d683e1573c179c55d2e09aabeabd7af110c
         for col_name, col_type in columns_to_add:
             try:
                 c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
@@ -332,21 +328,11 @@ def init_db():
                     print(f"✅ Column {col_name} already exists, skipping...")
                 else:
                     raise
-<<<<<<< HEAD
 
     # Insert/update version info
     version_to_set = 9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version)
-    c.execute(
-        '''INSERT OR REPLACE INTO db_version (version, updated_at)
-=======
-            try:
-                c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
-                print(f"✅ Added column: {col_name}")
-            except sqlite3.OperationalError as e:
-                if "duplicate column" in str(e).lower():
-                    print(f"✅ Column {col_name} already exists, skipping...")
-                else:
-                    raise
+    c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
+                 VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
 
     # Version 10: Add study system tables
     if current_version < 10:
@@ -396,12 +382,37 @@ def init_db():
     # Insert/update version info
     version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
     c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
->>>>>>> 779a7d683e1573c179c55d2e09aabeabd7af110c
                  VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
 
     conn.commit()
     conn.close()
     print("✅ Database initialized/updated successfully")
+
+
+# Initialize database with safety checks
+try:
+   init_db()
+   init_quest_tables()
+   print("✅ Quest system initialized")
+except Exception as e:
+   print(f"❌ Database initialization error: {e}")
+   # Try to restore from most recent backup
+   import os
+   import glob
+
+   backup_files = glob.glob('backups/questuza_backup_*.db')
+   if backup_files:
+       latest_backup = max(backup_files, key=os.path.getctime)
+       try:
+           import shutil
+           shutil.copy2(latest_backup, 'questuza.db')
+           print(f"✅ Restored from backup: {latest_backup}")
+           init_db()  # Try initialization again
+       except Exception as restore_error:
+           print(f"❌ Backup restoration failed: {restore_error}")
+   else:
+       print("❌ No backup files found")
+
 
 
 # Initialize database with safety checks
@@ -4542,10 +4553,7 @@ async def help_cmd(ctx):
         "%banner <url>": "Set profile banner for embed (Level 1+)",
         "%color <hex>": "Change profile color for embed",
         "%leaderboard [category] [page]": "View leaderboards (overall/words/vc/quests/xp)",
-<<<<<<< HEAD
-=======
         "%export [type]": "Export your data (study/user/all) as JSON",
->>>>>>> 779a7d683e1573c179c55d2e09aabeabd7af110c
         "%version": "Check bot version and changelog",
         "%guide": "Learn how the bot works",
         "%admin help": "View admin-only commands"
