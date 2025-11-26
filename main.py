@@ -886,27 +886,6 @@ def get_user_rank(user_id: int, guild_id: int) -> int:
     return 0  # User not found in leaderboard
 
 
-def get_user_rank(user_id: int, guild_id: int) -> int:
-    """Get user's rank in the overall leaderboard"""
-    conn = get_db_connection()
-    c = conn.cursor()
-
-    # Get all users ordered by level DESC, xp DESC
-    c.execute(
-        '''SELECT user_id FROM users 
-                 WHERE guild_id = ? 
-                 ORDER BY level DESC, xp DESC''', (guild_id, ))
-    results = c.fetchall()
-    conn.close()
-
-    # Find the rank (1-indexed)
-    for rank, (uid, ) in enumerate(results, 1):
-        if uid == user_id:
-            return rank
-
-    return 0  # User not found in leaderboard
-
-
 def count_unique_words(text: str) -> int:
     text = re.sub(r'http\S+', '', text)
     text = re.sub(r'<@!?\d+>', '', text)
@@ -1033,7 +1012,7 @@ async def handle_study_session_recovery():
                                                             f"{member.mention}",
                                                             embed=embed)
                                                         break
-                                                    except:
+                                                    except (discord.Forbidden, discord.HTTPException):
                                                         continue
                                         break
 
@@ -1064,7 +1043,7 @@ def validate_pdf_url(url):
         response = requests.head(url, timeout=10)
         content_type = response.headers.get('content-type', '').lower()
         return 'pdf' in content_type or url.lower().endswith('.pdf')
-    except:
+    except (requests.RequestException, ValueError):
         return False
 
 
@@ -1133,11 +1112,11 @@ def render_pdf_page(url, page_num=0, zoom=2.0):
         # Clean up any temp files
         try:
             os.remove('temp_pdf.pdf')
-        except:
+        except FileNotFoundError:
             pass
         try:
             os.remove(f'temp_page_{page_num}.png')
-        except:
+        except FileNotFoundError:
             pass
         return None, str(e), 0
 
@@ -1653,8 +1632,9 @@ async def on_message(message):
                             # Delete after 10 seconds
                             await asyncio.sleep(10)
                             await correction_msg.delete()
-                        except:
-                            pass  # Ignore if we can't send/delete
+                        except (discord.Forbidden, discord.NotFound, asyncio.TimeoutError):
+
+                            pass  # Ignore if we can't send/delete message
 
         conn.close()
 
@@ -1876,11 +1856,11 @@ async def on_message(message):
                     await announcement_channel.send(embed=embed)
                 else:
                     await message.channel.send(embed=embed)
-            except:
+            except (discord.Forbidden, discord.HTTPException):
                 try:
                     await message.channel.send(embed=embed)
-                except:
-                    pass
+                except Exception as e:
+            logging.debug(f"Exception caught: {e}")
 
     await check_level_up(message.author, message.guild)
     await bot.process_commands(message)
@@ -2862,8 +2842,8 @@ async def study_cmd(ctx, action: str = None, *, args: str = None):
                     # Clean up
                     try:
                         os.remove(img_path)
-                    except:
-                        pass
+                    except Exception as e:
+            logging.debug(f"Exception caught: {e}")
 
                     # Delete status message
                     await status_msg.delete()
@@ -3401,8 +3381,8 @@ async def study_cmd(ctx, action: str = None, *, args: str = None):
                 try:
                     import os
                     os.remove(img_path)
-                except:
-                    pass
+                except Exception as e:
+            logging.debug(f"Exception caught: {e}")
 
                 await status_msg.delete()
 
@@ -4156,8 +4136,8 @@ def generate_profile_card(user: discord.Member, user_data: Dict,
                 # Darken the dominant color for the background
                 progress_bar_bg = tuple(
                     max(0, int(c * 0.6)) for c in dominant_color)
-        except:
-            pass  # If background image fails, just use solid color
+        except Exception as e:
+            logging.debug(f"Exception caught: {e}")  # If background image fails, just use solid color
 
     # Try to load Anton font, fallback to default
     # Note: To use Anton font, place Anton-Regular.ttf in the 'fonts' directory or root directory
@@ -4177,8 +4157,8 @@ def generate_profile_card(user: discord.Member, user_data: Dict,
                 if os.path.exists(path):
                     font_path_used = path
                     break
-            except:
-                continue
+            except Exception:
+                                        continue
 
         if font_path_used:
             # Get user-defined font size (default 3x larger = 99px)
@@ -4735,8 +4715,8 @@ async def resettracker_cmd(ctx, member: discord.Member = None):
             value="Your XP, level, and completed quests are still safe!",
             inline=False)
         await member.send(embed=user_embed)
-    except:
-        pass  # User might have DMs disabled
+    except Exception as e:
+            logging.debug(f"Exception caught: {e}")  # User might have DMs disabled
 
 
 # Add other essential commands
@@ -5713,8 +5693,8 @@ async def delete_quest_cmd(ctx, quest_id: str):
     # Clean up confirmation message
     try:
         await confirm_msg.delete()
-    except:
-        pass
+    except Exception as e:
+            logging.debug(f"Exception caught: {e}")
 
 
 @bot.command(name='listcustomquests')
@@ -8624,8 +8604,9 @@ async def on_message(message):
                             # Delete after 10 seconds
                             await asyncio.sleep(10)
                             await correction_msg.delete()
-                        except:
-                            pass  # Ignore if we can't send/delete
+                        except (discord.Forbidden, discord.NotFound, asyncio.TimeoutError):
+
+                            pass  # Ignore if we can't send/delete message
 
         conn.close()
 
@@ -8837,11 +8818,11 @@ async def on_message(message):
                     await announcement_channel.send(embed=embed)
                 else:
                     await message.channel.send(embed=embed)
-            except:
+            except (discord.Forbidden, discord.HTTPException):
                 try:
                     await message.channel.send(embed=embed)
-                except:
-                    pass
+                except Exception as e:
+            logging.debug(f"Exception caught: {e}")
 
     await check_level_up(message.author, message.guild)
     await bot.process_commands(message)
@@ -8919,3 +8900,6 @@ if __name__ == "__main__":
         exit(1)
     except Exception as e:
         print(f"❌ Bot failed to start: {e}")
+
+
+
