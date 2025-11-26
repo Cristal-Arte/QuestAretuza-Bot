@@ -5404,23 +5404,18 @@ async def admin_cmd(ctx, action: str = None):
 
     admin_commands = {
         "%admin resettracker <user>": "Reset user's XP trackers (not XP itself, just tracking systems)",
-        "%syncxp <user>": "Sync XP and trigger level-up checks for a user (admin only)",
-        "%synchistory [user]": "Sync message history for a user (admin only)",
-        "%forcevc <user> <seconds>":
-        "Force add VC time to a user (admin only)",
-        "%forcelevel <user> <level>": "Force set a user's level (admin only)",
-        "%forcexp <user> <amount>": "Force add XP to a user (admin only)",
-        "%forcewords <user> <amount>":
-        "Force add words to a user (admin only)",
-        "%forcemessages <user> <amount>":
-        "Force add messages to a user (admin only)",
-        "%forcequests <user> <amount>":
-        "Force add quests completed to a user (admin only)",
-        "%trivia <action>":
-        "Manage trivia questions and sessions (admin only)",
-        "%testweekly [user]": "Test weekly quest reset (admin only)",
-        "%testlevel [user]": "Test leveling system calculations (admin only)",
-        "%testall [user]": "Run all tracker tests (admin only)",
+        "%syncxp <user>": "Sync XP and trigger level-up checks for a user",
+        "%approvequests <pending|approve|reject> [id]": "Review and approve/reject unique quest submissions",
+        "%forcevc <user> <seconds>": "Force add VC time to a user",
+        "%forcelevel <user> <level>": "Force set a user's level",
+        "%forcexp <user> <amount>": "Force add XP to a user",
+        "%forcewords <user> <amount>": "Force add words to a user",
+        "%forcemessages <user> <amount>": "Force add messages to a user",
+        "%forcequests <user> <amount>": "Force add quests completed to a user",
+        "%trivia <action>": "Manage trivia questions and sessions",
+        "%testweekly [user]": "Test weekly quest reset",
+        "%testlevel [user]": "Test leveling system calculations",
+        "%testall [user]": "Run all tracker tests",
     }
 
     for cmd, desc in admin_commands.items():
