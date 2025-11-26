@@ -530,11 +530,62 @@ def init_db():
 
         print("✅ Study system tables created successfully")
 
+    # Version 11: Add unique quest submission and tracking
+    if current_version < 11:
+        print("🎯 Adding unique quest submission system...")
+        
+        # Unique quest submissions table (for photo/file submissions)
+        c.execute('''CREATE TABLE IF NOT EXISTS unique_quest_submissions
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER, guild_id INTEGER, quest_id TEXT,
+                       submission_type TEXT, content_url TEXT, text_content TEXT,
+                       submitted_at TEXT, approved INTEGER DEFAULT 0,
+                       approved_by INTEGER, approved_at TEXT,
+                       UNIQUE(user_id, guild_id, quest_id))''')
+        
+        # User unique quest progress table
+        c.execute('''CREATE TABLE IF NOT EXISTS user_unique_quests
+                      (user_id INTEGER, guild_id INTEGER, quest_id TEXT,
+                       level_unlocked INTEGER, completed INTEGER DEFAULT 0,
+                       completed_at TEXT, approved INTEGER DEFAULT 0,
+                       submission_id INTEGER,
+                       PRIMARY KEY (user_id, guild_id, quest_id))''')
+        
+        # Add new columns to users table if missing
+        columns_to_add = [
+            ('lifely_points', 'INTEGER DEFAULT 0'),
+            ('completed_unique_quests', 'TEXT DEFAULT "[]"'),
+            ('unique_quests_at_level', 'TEXT DEFAULT "{}"'),
+            ('last_unique_quest_check', 'TEXT'),
+            ('level_up_notified', 'INTEGER DEFAULT 0')
+        ]
+        
+        for col_name, col_type in columns_to_add:
+            try:
+                c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
+                print(f"✅ Added column: {col_name}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" in str(e).lower():
+                    print(f"✅ Column {col_name} already exists, skipping...")
+                else:
+                    raise
+        
+        # Indexes for unique quest tables
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_unique_submissions_user
+                      ON unique_quest_submissions(user_id, guild_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_unique_submissions_quest
+                      ON unique_quest_submissions(quest_id, approved)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_user_unique_quests
+                      ON user_unique_quests(user_id, guild_id, level_unlocked)''')
+        
+        print("✅ Unique quest system tables created successfully")
+
     # Insert/update version info
-    version_to_set = 10 if current_version < 10 else (
+    version_to_set = 11 if current_version < 11 else (
+        10 if current_version < 10 else (
         9 if current_version < 9 else
         (8 if current_version < 8 else 7 if current_version <
-         7 else current_version))
+         7 else current_version)))
     c.execute(
         '''INSERT OR REPLACE INTO db_version (version, updated_at)
                  VALUES (?, ?)''',
