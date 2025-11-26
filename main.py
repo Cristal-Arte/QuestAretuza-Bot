@@ -1681,11 +1681,12 @@ async def on_message(message):
             'content': normalized
         }
 
-        # If it's a consecutive duplicate outside spam channel => punish (deduct XP by removing equivalent lifetime words)
+        # If it's a consecutive duplicate outside spam channel => punish (deduct XP)
         if is_consecutive_duplicate and message.channel.id != SPAM_CHANNEL_ID:
-            # Deduct the XP equivalent by subtracting lifetime words (10 XP per word -> 1 word = 10 XP)
-            user_data['lifetime_words'] = user_data.get('lifetime_words',
-                                                        0) - xp_word_count
+            # Deduct the XP equivalent (10 XP per word)
+            xp_penalty = xp_word_count * 10
+            user_data['xp'] = max(0, user_data.get('xp', 0) - xp_penalty)
+            user_data['lifetime_words'] = user_data.get('lifetime_words', 0) - xp_word_count
             # Still count the message as a message for stats
             user_data['messages_sent'] += 1
         else:
@@ -1694,15 +1695,17 @@ async def on_message(message):
             # Keep unique words tracking (used by quests)
             user_data['unique_words'] += unique_words
 
-            # If this is the spam channel, award heavily reduced XP: 1 XP per 100 words (so add to xp directly)
+            # If this is the spam channel, award heavily reduced XP: 1 XP per 100 words
             if message.channel.id == SPAM_CHANNEL_ID:
                 spam_xp = xp_word_count // 100  # integer division: 1 XP per 100 words
                 if spam_xp:
                     user_data['xp'] = user_data.get('xp', 0) + spam_xp
+                    user_data['lifetime_words'] = user_data.get('lifetime_words', 0) + xp_word_count
             else:
-                # For regular channels, add xp via lifetime_words (10 XP per word)
-                user_data['lifetime_words'] = user_data.get(
-                    'lifetime_words', 0) + xp_word_count
+                # For regular channels, add XP directly (10 XP per word)
+                xp_gained = xp_word_count * 10
+                user_data['xp'] = user_data.get('xp', 0) + xp_gained
+                user_data['lifetime_words'] = user_data.get('lifetime_words', 0) + xp_word_count
 
         # Track channel usage
         conn = get_db_connection()
@@ -4733,6 +4736,72 @@ async def resettracker_cmd(ctx, member: discord.Member = None):
             logging.debug(f"Exception caught: {e}")  # User might have DMs disabled
 
 
+@bot.command(name='syncxp')
+@commands.has_permissions(administrator=True)
+async def sync_xp_cmd(ctx, member: discord.Member = None):
+    """Sync XP and trigger level-up checks for a user (admin only)"""
+    
+    if not member:
+        await ctx.send("❌ Please specify a user: `%syncxp <user>`")
+        return
+    
+    try:
+        user_data = get_user_data(member.id, ctx.guild.id)
+        if not user_data:
+            await ctx.send(f"❌ No data found for {member.mention}")
+            return
+        
+        old_level = user_data['level']
+        old_xp = user_data['xp']
+        
+        # Trigger level-up check
+        await check_level_up(member, ctx.guild)
+        
+        # Reload user data to get updated values
+        updated_user_data = get_user_data(member.id, ctx.guild.id)
+        new_level = updated_user_data['level']
+        new_xp = updated_user_data['xp']
+        
+        embed = discord.Embed(
+            title="✅ XP Sync Complete",
+            description=f"Synced XP and level progression for {member.mention}",
+            color=discord.Color.green())
+        embed.add_field(name="Previous Level", value=str(old_level), inline=True)
+        embed.add_field(name="New Level", value=str(new_level), inline=True)
+        embed.add_field(name="XP", value=f"{new_xp:,} XP", inline=False)
+        
+        if new_level > old_level:
+            embed.add_field(
+                name="✨ Level Up!",
+                value=f"User leveled up from **{old_level}** to **{new_level}**!",
+                inline=False)
+        
+        await ctx.send(embed=embed)
+        
+        # Notify the user
+        try:
+            user_embed = discord.Embed(
+                title="✅ XP Synced",
+                description=f"An admin has synced your XP in {ctx.guild.name}",
+                color=discord.Color.green())
+            user_embed.add_field(name="Your Current Level", value=str(new_level), inline=True)
+            user_embed.add_field(name="Your Current XP", value=f"{new_xp:,}", inline=True)
+            
+            if new_level > old_level:
+                user_embed.add_field(
+                    name="🎉 You Leveled Up!",
+                    value=f"Congratulations! You're now level **{new_level}**!",
+                    inline=False)
+            
+            await member.send(embed=user_embed)
+        except Exception as e:
+            logging.debug(f"Could not send DM: {e}")
+    
+    except Exception as e:
+        logging.error(f"Error in syncxp command: {e}")
+        await ctx.send(f"❌ Error syncing XP: {str(e)[:100]}")
+
+
 # Add other essential commands
 @bot.command(name='banner')
 async def banner_cmd(ctx, image_url: str = None):
@@ -5119,6 +5188,7 @@ async def admin_cmd(ctx, action: str = None):
 
     admin_commands = {
         "%admin resettracker <user>": "Reset user's XP trackers (not XP itself, just tracking systems)",
+        "%syncxp <user>": "Sync XP and trigger level-up checks for a user (admin only)",
         "%synchistory [user]": "Sync message history for a user (admin only)",
         "%forcevc <user> <seconds>":
         "Force add VC time to a user (admin only)",
