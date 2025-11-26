@@ -3922,9 +3922,21 @@ async def profile_cmd(ctx, member: discord.Member = None):
             return
 
         current_level = user_data['level']
-        next_level = current_level + 1
-        next_req = LevelSystem.get_level_requirements(
-            next_level) if next_level <= 100 else None
+        current_xp = user_data['xp']
+        
+        # Get XP for this level and next level
+        xp_for_current = get_xp_for_level(current_level)
+        xp_for_next = get_xp_for_level(current_level + 1) if current_level < 100 else get_xp_for_level(100)
+        
+        # Calculate progress percentage
+        xp_progress = current_xp - xp_for_current
+        xp_needed = xp_for_next - xp_for_current
+        progress_percent = int((xp_progress / xp_needed * 100)) if xp_needed > 0 else 100
+        
+        # Create progress bar
+        bar_length = 20
+        filled = int(bar_length * progress_percent / 100)
+        progress_bar = "█" * filled + "░" * (bar_length - filled)
 
         # Safe color parsing
         try:
@@ -3932,7 +3944,7 @@ async def profile_cmd(ctx, member: discord.Member = None):
         except (ValueError, AttributeError):
             profile_color = discord.Color.from_str("#FFFFFF")
 
-        embed = discord.Embed(title=f"{target.display_name}'s Profile",
+        embed = discord.Embed(title=f"*__{target.display_name}'s Profile__*",
                               color=profile_color)
 
         # Add user's avatar as thumbnail in top-right
@@ -3941,7 +3953,7 @@ async def profile_cmd(ctx, member: discord.Member = None):
         if user_data.get('banner_url'):
             embed.set_image(url=user_data['banner_url'])
 
-        # Calculate quest multipliers
+        # Calculate total multiplier
         daily_quests = user_data.get('daily_quests_completed', 0)
         weekly_quests = user_data.get('weekly_quests_completed', 0)
         quest_multiplier = 1.0
@@ -3953,46 +3965,38 @@ async def profile_cmd(ctx, member: discord.Member = None):
 
         total_multiplier = user_data.get('xp_multiplier', 1.0) * quest_multiplier
 
-        embed.add_field(name="Level", value=user_data['level'], inline=True)
-        embed.add_field(name="Total XP", value=f"{user_data['xp']:,}", inline=True)
-        embed.add_field(name="Quests Completed",
-                        value=user_data['quests_completed'],
-                        inline=True)
+        # Main stats with bold/italic formatting
+        embed.add_field(name="***🏆 Level***", value=f"***{current_level}***", inline=True)
+        embed.add_field(name="***⭐ Total XP***", value=f"***{current_xp:,}***", inline=True)
+        embed.add_field(name="***💎 Lifely Points***", value=f"***{user_data.get('lifely_points', 0)}***", inline=True)
 
-        # Show XP multipliers - always display this field
-        multiplier_text = f"**Base:** {user_data.get('xp_multiplier', 1.0)}x"
-        if daily_quests > 0:
-            multiplier_text += f"\n**Daily Quest Bonus:** +0.1x ({daily_quests} completed today)"
-        if weekly_quests > 0:
-            multiplier_text += f"\n**Weekly Quest Bonus:** +0.25x ({weekly_quests} completed this week)"
-        if total_multiplier > 1.0:
-            multiplier_text += f"\n**Total:** {total_multiplier:.2f}x"
-
-        embed.add_field(name="🔥 XP Multipliers",
-                        value=multiplier_text,
-                        inline=False)
-
-        if next_req and next_level <= 100:
-            progress_text = (
-                f"**Words:** {user_data['unique_words']}/{next_req['words']}\n"
-                f"**VC Time:** {user_data['vc_seconds']//60}/{next_req['vc_minutes']}m\n"
-                f"**Messages:** {user_data['messages_sent']}/{next_req['messages']}\n"
-                f"**Quests:** {user_data['quests_completed']}/{next_req['quests']}"
+        # XP Progress bar to next level
+        if current_level < 100:
+            embed.add_field(
+                name=f"Progress to Level {current_level + 1}",
+                value=f"{progress_bar} {progress_percent}%\n`{xp_progress:,} / {xp_needed:,} XP`",
+                inline=False
             )
         else:
-            progress_text = "🎉 Max Level Reached!"
+            embed.add_field(name="Status", value="🎉 ***Max Level Reached!***", inline=False)
 
-        embed.add_field(name=f"Progress to Level {next_level}"
-                        if next_level <= 100 else "Max Level",
-                        value=progress_text,
-                        inline=False)
+        # Total multiplier (simplified - just show total, not breakdown as per request)
+        embed.add_field(
+            name="🔥 XP Multiplier",
+            value=f"***{total_multiplier:.2f}x*** total boost",
+            inline=False
+        )
+
+        # Quests completed
+        embed.add_field(
+            name="Quests Completed",
+            value=f"***Daily:*** {daily_quests} | ***Weekly:*** {weekly_quests} | ***Total:*** ***{user_data['quests_completed']}***",
+            inline=False
+        )
 
         embed.add_field(
-            name="Lifetime Stats",
-            value=f"**Unique Words:** {user_data['lifetime_words']:,}\n"
-            f"**Channels Used:** {user_data['channels_used']}\n"
-            f"**Images Sent:** {user_data['images_sent']}\n"
-            f"**Voice Time:** {user_data['vc_seconds']//3600}h {(user_data['vc_seconds']%3600)//60}m",
+            name="Lifetime Statistics",
+            value=f"***Unique Words:*** {user_data['lifetime_words']:,}\n***Channels Used:*** {user_data['channels_used']}\n***Images Sent:*** {user_data['images_sent']}\n***Voice Time:*** {user_data['vc_seconds']//3600}h {(user_data['vc_seconds']%3600)//60}m",
             inline=False)
 
         if user_data.get('xp_multiplier', 1.0) > 1.0:
