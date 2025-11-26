@@ -15,13 +15,16 @@ from quest_system import (init_quest_tables, get_all_quests,
                           check_and_complete_quests, claim_quest_reward,
                           update_daily_stats, update_weekly_stats, QuestType,
                           get_user_quest_progress)
+from level_system import (LEVEL_REQUIREMENTS, UNIQUE_QUESTS, get_xp_for_level,
+                          get_level_from_xp, get_unique_quest_for_level,
+                          get_required_unique_quests_count)
 from PIL import Image, ImageDraw, ImageFont
 import requests
 from io import BytesIO
 import fitz  # PyMuPDF for PDF handling
 
 # Bot version - Update this when making changes
-VERSION = "5.1.0"
+VERSION = "5.2.0"
 
 # Flask app for uptime monitoring
 flask_app = Flask('questuza-health')
@@ -900,7 +903,7 @@ def create_default_user(user_id: int, guild_id: int) -> Dict:
         'guild_id': guild_id,
         'unique_words': 0,
         'vc_seconds': 0,
-        'level': 0,
+        'level': 1,
         'xp': 0,
         'messages_sent': 0,
         'images_sent': 0,
@@ -917,7 +920,12 @@ def create_default_user(user_id: int, guild_id: int) -> Dict:
         'daily_quests_completed': 0,
         'weekly_quests_completed': 0,
         'last_daily_reset': None,
-        'last_weekly_reset': None
+        'last_weekly_reset': None,
+        'lifely_points': 0,
+        'completed_unique_quests': '[]',  # JSON array of completed quest IDs
+        'unique_quests_at_level': '{}',   # JSON dict mapping level -> completed count
+        'last_unique_quest_check': None,
+        'level_up_notified': 0
     }
 
 
@@ -3608,55 +3616,58 @@ async def study_cmd(ctx, action: str = None, *, args: str = None):
 
 
 async def check_level_up(user, guild):
+    """Check if user has leveled up using the new XP-based level system"""
     user_data = get_user_data(user.id, guild.id)
     if not user_data:
         return
 
-    current_level = user_data['level']
-    next_level = current_level + 1
-
-    if next_level > 100:
-        return
-
-    requirements = LevelSystem.get_level_requirements(next_level)
-
-    words_met = user_data['unique_words'] >= requirements['words']
-    vc_met = user_data['vc_seconds'] >= (requirements['vc_minutes'] * 60)
-    messages_met = user_data['messages_sent'] >= requirements['messages']
-    quests_met = user_data['quests_completed'] >= requirements['quests']
-
-    if words_met and vc_met and messages_met and quests_met:
-        user_data['level'] = next_level
-        user_data['xp'] += requirements['words'] * 10
-        # Reset counters after leveling up
-        user_data['unique_words'] = max(
-            0, user_data['unique_words'] - requirements['words'])
-        user_data['vc_seconds'] = max(
-            0, user_data['vc_seconds'] - (requirements['vc_minutes'] * 60))
-        user_data['messages_sent'] = max(
-            0, user_data['messages_sent'] - requirements['messages'])
-        user_data['quests_completed'] = max(
-            0, user_data['quests_completed'] - requirements['quests'])
+    current_level = get_level_from_xp(user_data['xp'])
+    old_level = user_data['level']
+    
+    # Update level if it changed
+    if current_level > old_level:
+        user_data['level'] = current_level
         update_user_data(user_data)
-
-        embed = discord.Embed(
+        
+        # Send DM to user about level up
+        try:
+            embed = discord.Embed(
+                title="🎉 **Level Up!**",
+                description=f"Congratulations! You've reached **Level {current_level}**!",
+                color=discord.Color.gold()
+            )
+            
+            # Add unique quest requirement info if applicable
+            if current_level >= 11:
+                required_quests = get_required_unique_quests_count(current_level)
+                quest_info = get_unique_quest_for_level(current_level)
+                if quest_info:
+                    embed.add_field(
+                        name="🌍 New Unique Quest Required!",
+                        value=f"**{quest_info['name']}**\n{quest_info['description']}\n\nYou must complete unique quests to progress. Use `%uniquequest list` to see all available quests.",
+                        inline=False
+                    )
+            
+            embed.add_field(name="Current XP", value=f"**{user_data['xp']:,}** XP", inline=True)
+            embed.add_field(name="Progress to Next Level", value=f"See your profile with `%profile`", inline=True)
+            embed.set_footer(text=f"Keep up the great work! | {VERSION}")
+            
+            await user.send(embed=embed)
+        except discord.Forbidden:
+            pass  # User has DMs disabled
+        except Exception as e:
+            logging.debug(f"Could not send level up DM to {user}: {e}")
+        
+        # Also send to channel
+        embed_channel = discord.Embed(
             title="🎉 Level Up!",
-            description=
-            f"{user.mention} reached **Level {user_data['level']}**!",
-            color=discord.Color.green())
-        embed.add_field(name="Words",
-                        value=f"{user_data['unique_words']:,}",
-                        inline=True)
-        embed.add_field(name="VC Time",
-                        value=f"{user_data['vc_seconds']//60}m",
-                        inline=True)
-        embed.add_field(name="Quests",
-                        value=user_data['quests_completed'],
-                        inline=True)
-
+            description=f"{user.mention} reached **Level {current_level}**!",
+            color=discord.Color.gold()
+        )
+        embed_channel.add_field(name="Total XP", value=f"{user_data['xp']:,}", inline=True)
+        
         channel = None
-        if guild.system_channel and guild.system_channel.permissions_for(
-                guild.me).send_messages:
+        if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
             channel = guild.system_channel
         else:
             for ch in guild.text_channels:
@@ -3666,10 +3677,9 @@ async def check_level_up(user, guild):
 
         if channel:
             try:
-                await channel.send(embed=embed)
-                print(f"🎉 Level up message sent for {user}")
-            except Exception as e:
-                print(f"❌ Couldn't send level up message: {e}")
+                await channel.send(embed=embed_channel)
+            except (discord.Forbidden, discord.HTTPException):
+                logging.debug(f"Could not send level up message to channel")
 
 
 async def handle_offline_vc_tracking():
@@ -4798,7 +4808,6 @@ class LeaderboardView(ui.View):
         
         for cat, (title, display_name, query, sort_key) in categories.items():
             results = conn.execute(query, (self.ctx.guild.id,)).fetchall()
-            conn.close()
             
             if not results:
                 empty_embed = discord.Embed(
@@ -4856,6 +4865,8 @@ class LeaderboardView(ui.View):
                 pages.append(embed)
             
             self.all_embeds[cat] = pages
+        
+        conn.close()
     
     async def update_embed(self):
         """Update the embed to current category and page"""
