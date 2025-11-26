@@ -7,6 +7,7 @@ from typing import Dict, List
 import re
 import os
 import asyncio
+import json
 from flask import Flask, request, jsonify
 import logging
 from threading import Thread
@@ -4853,6 +4854,170 @@ async def sync_xp_cmd(ctx, member: discord.Member = None):
         await ctx.send(f"❌ Error syncing XP: {str(e)[:100]}")
 
 
+@bot.command(name='approvequests')
+@commands.has_permissions(administrator=True)
+async def approvequests_cmd(ctx, action: str = None, submission_id: str = None):
+    """Admin command to approve/reject unique quest submissions - Usage: %approvequests <pending|approve|reject> [id]"""
+    
+    if not action:
+        await ctx.send("❌ Use `%approvequests pending` to see pending submissions")
+        return
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    action = action.lower()
+    
+    if action == "pending":
+        # List all pending submissions
+        c.execute('''SELECT id, user_id, quest_id, submitted_at FROM unique_quest_submissions 
+                     WHERE guild_id = ? AND approved = 0
+                     ORDER BY submitted_at DESC LIMIT 20''',
+                  (ctx.guild.id,))
+        pending = c.fetchall()
+        conn.close()
+        
+        if not pending:
+            await ctx.send("✅ No pending quest submissions!")
+            return
+        
+        embed = discord.Embed(
+            title="⏳ Pending Quest Submissions",
+            description=f"Total: **{len(pending)}** pending approvals",
+            color=discord.Color.orange())
+        
+        for row in pending[:10]:  # Show max 10
+            sub_id, user_id, quest_id, submitted_at = row
+            embed.add_field(
+                name=f"Submission #{sub_id}",
+                value=f"**User:** <@{user_id}>\n**Quest:** {quest_id}\n**Submitted:** {submitted_at}",
+                inline=False)
+        
+        if len(pending) > 10:
+            embed.add_field(name="... and more", value=f"{len(pending) - 10} more pending", inline=False)
+        
+        embed.set_footer(text="Use %approvequests approve <id> or reject <id> to review")
+        await ctx.send(embed=embed)
+    
+    elif action == "approve":
+        if not submission_id or not submission_id.isdigit():
+            await ctx.send("❌ Please provide a submission ID: `%approvequests approve <id>`")
+            return
+        
+        submission_id = int(submission_id)
+        
+        # Get submission details
+        c.execute('''SELECT user_id, quest_id FROM unique_quest_submissions 
+                     WHERE id = ? AND guild_id = ?''',
+                  (submission_id, ctx.guild.id))
+        result = c.fetchone()
+        
+        if not result:
+            await ctx.send("❌ Submission not found!")
+            conn.close()
+            return
+        
+        user_id, quest_id = result
+        
+        # Find the quest
+        from level_system import UNIQUE_QUESTS
+        quest = None
+        for q in UNIQUE_QUESTS:
+            if q['id'] == quest_id:
+                quest = q
+                break
+        
+        if not quest:
+            await ctx.send("❌ Quest not found!")
+            conn.close()
+            return
+        
+        # Update submission to approved
+        c.execute('''UPDATE unique_quest_submissions SET approved = 1, approved_by = ?, approved_at = ?
+                     WHERE id = ?''',
+                  (ctx.author.id, datetime.datetime.now().isoformat(), submission_id))
+        
+        # Award user XP and Lifely Points
+        user_data = get_user_data(user_id, ctx.guild.id)
+        if user_data:
+            user_data['xp'] += quest['xp_reward']
+            user_data['lifely_points'] = user_data.get('lifely_points', 0) + 1
+            
+            # Add to completed quests
+            completed_json = user_data.get('completed_unique_quests', '[]')
+            try:
+                completed_ids = json.loads(completed_json) if isinstance(completed_json, str) else []
+            except:
+                completed_ids = []
+            
+            if quest_id not in completed_ids:
+                completed_ids.append(quest_id)
+            
+            user_data['completed_unique_quests'] = json.dumps(completed_ids)
+            update_user_data(user_data)
+        
+        conn.commit()
+        conn.close()
+        
+        # Notify user
+        user = ctx.guild.get_member(user_id)
+        if user:
+            try:
+                embed = discord.Embed(
+                    title="✅ Quest Approved!",
+                    description=f"Your submission for **{quest['name']}** has been approved!",
+                    color=discord.Color.green())
+                embed.add_field(name="XP Earned", value=f"+{quest['xp_reward']:,} XP", inline=True)
+                embed.add_field(name="Lifely Points", value="+1", inline=True)
+                await user.send(embed=embed)
+            except:
+                pass
+        
+        await ctx.send(f"✅ Approved submission #{submission_id} for <@{user_id}>")
+    
+    elif action == "reject":
+        if not submission_id or not submission_id.isdigit():
+            await ctx.send("❌ Please provide a submission ID: `%approvequests reject <id>`")
+            return
+        
+        submission_id = int(submission_id)
+        
+        # Get submission details
+        c.execute('''SELECT user_id FROM unique_quest_submissions 
+                     WHERE id = ? AND guild_id = ?''',
+                  (submission_id, ctx.guild.id))
+        result = c.fetchone()
+        
+        if not result:
+            await ctx.send("❌ Submission not found!")
+            conn.close()
+            return
+        
+        user_id = result[0]
+        
+        # Delete the submission (reject)
+        c.execute('''DELETE FROM unique_quest_submissions WHERE id = ?''', (submission_id,))
+        conn.commit()
+        conn.close()
+        
+        # Notify user
+        user = ctx.guild.get_member(user_id)
+        if user:
+            try:
+                embed = discord.Embed(
+                    title="❌ Submission Rejected",
+                    description="Your quest submission did not meet the requirements. Please try again!",
+                    color=discord.Color.red())
+                await user.send(embed=embed)
+            except:
+                pass
+        
+        await ctx.send(f"❌ Rejected submission #{submission_id}")
+    
+    else:
+        await ctx.send("❌ Unknown action. Use `pending`, `approve`, or `reject`")
+
+
 # Add other essential commands
 @bot.command(name='banner')
 async def banner_cmd(ctx, image_url: str = None):
@@ -6019,6 +6184,251 @@ async def quest_progress_cmd(ctx, quest_id: str = None):
                     value=quest.quest_type.value.title(),
                     inline=True)
 
+    await ctx.send(embed=embed)
+
+
+# ===== UNIQUE QUESTS SYSTEM =====
+
+@bot.command(name='uniquequest')
+async def uniquequest_cmd(ctx, action: str = None, quest_id: str = None):
+    """Unique quest system - Usage: %uniquequest <list|submit|progress> [quest_id]"""
+    
+    if not action:
+        embed = discord.Embed(
+            title="💎 Unique Quest System",
+            description="Complete real-life quests to earn Lifely Points!",
+            color=discord.Color.gold())
+        embed.add_field(
+            name="Commands",
+            value="`%uniquequest list` - See available unique quests\n"
+                  "`%uniquequest progress` - Check your progress\n"
+                  "`%uniquequest submit <quest_id>` - Submit quest proof",
+            inline=False)
+        embed.add_field(
+            name="What are Unique Quests?",
+            value="Unique quests are real-life challenges that unlock at level 11+. Complete one quest per level to progress!",
+            inline=False)
+        await ctx.send(embed=embed)
+        return
+    
+    action = action.lower()
+    user_data = get_user_data(ctx.author.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(ctx.author.id, ctx.guild.id)
+    
+    if action == "list":
+        # List available unique quests
+        from level_system import UNIQUE_QUESTS, get_required_unique_quests_count
+        
+        current_level = user_data['level']
+        required_count = get_required_unique_quests_count(current_level)
+        
+        embed = discord.Embed(
+            title="💎 Available Unique Quests",
+            description=f"You are level **{current_level}**. Required quests: **{required_count}**",
+            color=discord.Color.gold())
+        
+        for idx, quest in enumerate(UNIQUE_QUESTS[:10], 1):  # Show first 10
+            approval_text = "✅ Photo" if quest['requires_approval'] else "✍️ Text"
+            embed.add_field(
+                name=f"{idx}. {quest['name']}",
+                value=f"{quest['description']}\n**Reward:** {quest['xp_reward']:,} XP | **Type:** {approval_text}",
+                inline=False)
+        
+        if len(UNIQUE_QUESTS) > 10:
+            embed.add_field(name="... and more", value=f"{len(UNIQUE_QUESTS) - 10} more quests available!", inline=False)
+        
+        embed.set_footer(text="Use %uniquequest submit <quest_id> to submit your proof")
+        await ctx.send(embed=embed)
+    
+    elif action == "progress":
+        # Show progress on unique quests
+        from level_system import UNIQUE_QUESTS, get_required_unique_quests_count
+        
+        current_level = user_data['level']
+        required_count = get_required_unique_quests_count(current_level)
+        
+        if current_level < 11:
+            embed = discord.Embed(
+                title="📍 Unique Quest Progress",
+                description=f"You are level **{current_level}**. Unique quests unlock at **level 11**!",
+                color=discord.Color.blue())
+            embed.add_field(
+                name="How to Unlock",
+                value=f"Reach level 11 to unlock your first unique quest. You're {get_xp_for_level(11) - user_data['xp']:,} XP away!",
+                inline=False)
+            await ctx.send(embed=embed)
+            return
+        
+        completed_json = user_data.get('completed_unique_quests', '[]')
+        try:
+            completed_ids = json.loads(completed_json) if isinstance(completed_json, str) else completed_json
+        except:
+            completed_ids = []
+        
+        embed = discord.Embed(
+            title="💎 Unique Quest Progress",
+            description=f"Level: **{current_level}** | Lifely Points: **{user_data.get('lifely_points', 0)}**",
+            color=discord.Color.gold())
+        
+        # Show required and completed
+        embed.add_field(
+            name="Requirements",
+            value=f"Quests Required: **{required_count}**\nQuests Completed: **{len(completed_ids)}**\nProgress: {len(completed_ids)}/{required_count}",
+            inline=False)
+        
+        if completed_ids:
+            completed_quests = [UNIQUE_QUESTS[int(qid.split('_')[2])] for qid in completed_ids if qid.split('_')[2].isdigit()]
+            quest_list = "\n".join([f"✅ {q['name']}" for q in completed_quests[:5]])
+            if len(completed_quests) > 5:
+                quest_list += f"\n... and {len(completed_quests) - 5} more"
+            embed.add_field(name="Completed Quests", value=quest_list, inline=False)
+        
+        await ctx.send(embed=embed)
+    
+    elif action == "submit":
+        if not quest_id:
+            await ctx.send("❌ Please specify a quest ID: `%uniquequest submit <quest_id>`")
+            return
+        
+        from level_system import UNIQUE_QUESTS
+        
+        # Find quest
+        quest = None
+        for q in UNIQUE_QUESTS:
+            if q['id'] == quest_id:
+                quest = q
+                break
+        
+        if not quest:
+            await ctx.send(f"❌ Quest not found: `{quest_id}`")
+            return
+        
+        # Check if user is high enough level
+        current_level = user_data['level']
+        if current_level < 11:
+            await ctx.send("❌ You must reach level 11 to submit unique quests!")
+            return
+        
+        # Store submission info in database
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        try:
+            c.execute(
+                '''INSERT OR REPLACE INTO unique_quest_submissions 
+                   (user_id, guild_id, quest_id, submission_type, text_content, submitted_at)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
+                (ctx.author.id, ctx.guild.id, quest_id, 
+                 'photo' if quest['requires_approval'] else 'text',
+                 ctx.message.content, datetime.datetime.now().isoformat()))
+            conn.commit()
+        except Exception as e:
+            logging.error(f"Error submitting unique quest: {e}")
+            await ctx.send(f"❌ Error submitting quest: {str(e)[:100]}")
+            return
+        finally:
+            conn.close()
+        
+        embed = discord.Embed(
+            title="✅ Quest Submitted!",
+            description=f"Successfully submitted **{quest['name']}**",
+            color=discord.Color.green())
+        embed.add_field(name="Quest", value=quest['description'], inline=False)
+        
+        if quest['requires_approval']:
+            embed.add_field(
+                name="⏳ Pending Review",
+                value="An admin will review your submission. You'll be notified when approved!",
+                inline=False)
+        else:
+            # Auto-approve text quests
+            embed.add_field(
+                name="✅ Auto-Approved",
+                value=f"This quest was automatically approved! You earned **{quest['xp_reward']:,} XP** and **1 Lifely Point**!",
+                inline=False)
+            
+            # Award XP and Lifely Points
+            user_data['xp'] += quest['xp_reward']
+            user_data['lifely_points'] = user_data.get('lifely_points', 0) + 1
+            
+            # Add to completed quests
+            completed_json = user_data.get('completed_unique_quests', '[]')
+            try:
+                completed_ids = json.loads(completed_json) if isinstance(completed_json, str) else []
+            except:
+                completed_ids = []
+            
+            if quest_id not in completed_ids:
+                completed_ids.append(quest_id)
+            
+            user_data['completed_unique_quests'] = json.dumps(completed_ids)
+            update_user_data(user_data)
+        
+        embed.set_footer(text=f"Quest ID: {quest_id}")
+        await ctx.send(embed=embed)
+
+
+@bot.command(name='bypassquest')
+async def bypassquest_cmd(ctx):
+    """Exchange 50K XP to skip a unique quest requirement - Usage: %bypassquest"""
+    
+    user_data = get_user_data(ctx.author.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(ctx.author.id, ctx.guild.id)
+    
+    current_level = user_data['level']
+    
+    if current_level >= 11:
+        await ctx.send("❌ You can only use bypass once you reach level 11. At level 11+, use this to skip difficult quests.")
+        return
+    
+    BYPASS_COST = 50000
+    
+    if user_data['xp'] < BYPASS_COST:
+        embed = discord.Embed(
+            title="❌ Not Enough XP",
+            description=f"You need **{BYPASS_COST:,} XP** to bypass a quest",
+            color=discord.Color.red())
+        embed.add_field(
+            name="Your XP",
+            value=f"{user_data['xp']:,} XP",
+            inline=True)
+        embed.add_field(
+            name="Missing",
+            value=f"{BYPASS_COST - user_data['xp']:,} XP",
+            inline=True)
+        await ctx.send(embed=embed)
+        return
+    
+    # Deduct XP and add to completed quests
+    user_data['xp'] -= BYPASS_COST
+    user_data['lifely_points'] = user_data.get('lifely_points', 0) + 1
+    
+    completed_json = user_data.get('completed_unique_quests', '[]')
+    try:
+        completed_ids = json.loads(completed_json) if isinstance(completed_json, str) else []
+    except:
+        completed_ids = []
+    
+    # Generate a bypass quest ID
+    bypass_id = f"bypass_{len(completed_ids)}"
+    if bypass_id not in completed_ids:
+        completed_ids.append(bypass_id)
+    
+    user_data['completed_unique_quests'] = json.dumps(completed_ids)
+    update_user_data(user_data)
+    
+    embed = discord.Embed(
+        title="✅ Quest Bypassed!",
+        description="You successfully exchanged 50K XP to skip a unique quest requirement",
+        color=discord.Color.green())
+    embed.add_field(name="XP Used", value="-50,000 XP", inline=True)
+    embed.add_field(name="Lifely Points Earned", value="+1", inline=True)
+    embed.add_field(
+        name="Note",
+        value="Bypassing is useful for skipping difficult quests, but completing them gives you the real-world benefit!",
+        inline=False)
     await ctx.send(embed=embed)
 
 
