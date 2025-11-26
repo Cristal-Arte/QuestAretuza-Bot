@@ -293,6 +293,14 @@ UNIQUE_QUESTS = [
         "xp_reward": 3000,
         "lifely_points": 1
     },
+    {
+        "id": "mystery_box",
+        "name": "Mystery Box",
+        "description": "Wrap something you own in aluminum foil or paper and take a picture of it - others have to guess what it is",
+        "requires_approval": True,
+        "xp_reward": 2500,
+        "lifely_points": 1
+    },
 ]
 
 def get_xp_for_level(level: int) -> int:
