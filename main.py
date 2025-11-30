@@ -5426,6 +5426,8 @@ async def admin_cmd(ctx, action: str = None):
         "%testweekly [user]": "Test weekly quest reset",
         "%testlevel [user]": "Test leveling system calculations",
         "%testall [user]": "Run all tracker tests",
+        "%resetalllevels": "⚠️ NUCLEAR: Reset ALL users' levels to 1 (XP=0). Keeps cosmetics! Use with caution.",
+        "%setlifetime <user> <words|messages|vc> <amount>": "Set lifetime cosmetic stat (display-only, flex stat)",
     }
 
     for cmd, desc in admin_commands.items():
@@ -5433,6 +5435,125 @@ async def admin_cmd(ctx, action: str = None):
 
     embed.set_footer(text="⚠️ Use these commands responsibly!")
     await ctx.send(embed=embed)
+
+
+@bot.command(name='resetalllevels')
+@commands.has_permissions(administrator=True)
+async def resetalllevels_cmd(ctx):
+    """⚠️ NUCLEAR: Reset ALL users' levels to 1 (XP=0). Keeps cosmetics!"""
+    # Confirmation embed
+    embed = discord.Embed(
+        title="⚠️ WARNING: Nuclear Reset",
+        description="This will reset **ALL users' levels and XP to 0** but keep cosmetics (banners, colors).",
+        color=discord.Color.red()
+    )
+    embed.add_field(name="What happens:", value="• All users → Level 1\n• All XP → 0\n• Lifetime stats preserved (words, messages, VC)\n• Banners & colors kept", inline=False)
+    embed.add_field(name="Proceed?", value="React with ✅ within 10 seconds to confirm", inline=False)
+    
+    msg = await ctx.send(embed=embed)
+    await msg.add_reaction("✅")
+    await msg.add_reaction("❌")
+    
+    def check(reaction, user):
+        return user == ctx.author and str(reaction.emoji) in ["✅", "❌"] and reaction.message.id == msg.id
+    
+    try:
+        reaction, user = await bot.wait_for("reaction_add", timeout=10.0, check=check)
+        if str(reaction.emoji) != "✅":
+            await ctx.send("❌ Reset cancelled.")
+            return
+    except asyncio.TimeoutError:
+        await ctx.send("❌ Reset cancelled (timeout).")
+        return
+    
+    # Perform reset
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    try:
+        # Get count of users being reset
+        c.execute('SELECT COUNT(*) FROM users WHERE guild_id = ?', (ctx.guild.id,))
+        user_count = c.fetchone()[0]
+        
+        # Reset all users' levels and XP, but keep cosmetics
+        c.execute('''UPDATE users 
+                     SET level = 1, xp = 0
+                     WHERE guild_id = ?''',
+                  (ctx.guild.id,))
+        
+        conn.commit()
+        
+        embed = discord.Embed(
+            title="✅ Reset Complete!",
+            description=f"Reset **{user_count}** users to Level 1",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Summary", value=f"• Users reset: {user_count}\n• Levels: 1\n• XP: 0\n• Cosmetics: Preserved ✓", inline=False)
+        embed.set_footer(text="Fresh start! 🎉")
+        
+        await ctx.send(embed=embed)
+        logging.info(f"[RESET] Admin {ctx.author} reset {user_count} users to Level 1")
+        
+    except Exception as e:
+        logging.error(f"Error in resetalllevels: {e}")
+        await ctx.send(f"❌ Error during reset: {str(e)[:100]}")
+    finally:
+        conn.close()
+
+
+@bot.command(name='setlifetime')
+@commands.has_permissions(administrator=True)
+async def setlifetime_cmd(ctx, member: discord.Member = None, stat: str = None, amount: str = None):
+    """Set lifetime cosmetic stats (display-only flex stats) - Usage: %setlifetime <user> <words|messages|vc> <amount>"""
+    if not member or not stat or not amount:
+        embed = discord.Embed(
+            title="❌ Invalid usage",
+            description="Usage: `%setlifetime <user> <stat> <amount>`",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="Stats:", value="• `words` - Lifetime words\n• `messages` - Messages sent\n• `vc` - VC seconds", inline=False)
+        embed.add_field(name="Example:", value="`%setlifetime @User words 50000`", inline=False)
+        await ctx.send(embed=embed)
+        return
+    
+    stat = stat.lower()
+    if stat not in ['words', 'messages', 'vc']:
+        await ctx.send("❌ Invalid stat! Use: `words`, `messages`, or `vc`")
+        return
+    
+    try:
+        amount_int = int(amount)
+    except ValueError:
+        await ctx.send(f"❌ Amount must be a number! Got: `{amount}`")
+        return
+    
+    user_data = get_user_data(member.id, ctx.guild.id)
+    if not user_data:
+        user_data = create_default_user(member.id, ctx.guild.id)
+    
+    # Update the requested stat
+    if stat == 'words':
+        user_data['lifetime_words'] = amount_int
+        stat_display = "Lifetime Words"
+    elif stat == 'messages':
+        user_data['messages_sent'] = amount_int
+        stat_display = "Messages Sent"
+    elif stat == 'vc':
+        user_data['vc_seconds'] = amount_int
+        stat_display = "VC Time"
+    
+    update_user_data(user_data)
+    
+    embed = discord.Embed(
+        title="✅ Lifetime Stat Updated",
+        description=f"{member.mention}'s {stat_display} set to **{amount_int:,}**",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="Note:", value="This is a **display-only cosmetic stat**. It does NOT affect level or XP.", inline=False)
+    embed.add_field(name="Updates:", value="This stat will auto-update with every message/VC session.", inline=False)
+    
+    await ctx.send(embed=embed)
+    logging.info(f"[SETLIFETIME] Admin {ctx.author} set {member}'s {stat} to {amount_int}")
 
 
 @bot.command(name='quests')
