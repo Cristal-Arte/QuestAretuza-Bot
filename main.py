@@ -25,7 +25,7 @@ from io import BytesIO
 import fitz  # PyMuPDF for PDF handling
 
 # Bot version - Update this when making changes
-VERSION = "5.2.0"
+VERSION = "6.1.4"
 
 # Flask app for uptime monitoring
 flask_app = Flask('questuza-health')
@@ -5228,23 +5228,49 @@ async def leaderboard_cmd(ctx, category: str = "overall"):
 
 @bot.command(name='version')
 async def version_cmd(ctx):
-    """Check the bot's current version"""
+    """Check the bot's current version and features"""
     embed = discord.Embed(title="🤖 Questuza Version",
                           description=f"Current version: **{VERSION}**",
                           color=discord.Color.from_str("#FFFFFF"))
-    embed.add_field(name="📅 Last Updated",
-                    value="Features added in this version:\n"
-                    "• **Phase 5: Polish & Reliability Complete**\n"
-                    "• Comprehensive error handling throughout\n"
-                    "• Data recovery systems and session persistence\n"
-                    "• Study session recovery after bot restarts\n"
-                    "• Enhanced UX with better conversation flows\n"
-                    "• Automatic backup and restore functionality\n"
-                    "• Improved error messages and user feedback\n"
-                    "• Retry mechanisms for failed operations\n"
-                    "• System health monitoring and logging",
-                    inline=False)
-    embed.set_footer(text="Use %help for command list")
+    embed.add_field(
+        name="✨ Core Features",
+        value="• **Level System**: 100 explicit levels with exponential XP scaling\n"
+              "• **Quest System**: Daily, Weekly, Achievement, Special, and Unique quests\n"
+              "• **XP Multipliers**: Boost XP with quest completion bonuses (up to 1.35x)\n"
+              "• **Unique Quests**: 30 real-life quests unlocking at level 11+\n"
+              "• **Voice Chat Tracking**: Auto-tracks VC time with 5-hour session cap\n"
+              "• **Leaderboards**: Multiple categories (overall, words, VC, quests, XP)",
+        inline=False
+    )
+    embed.add_field(
+        name="🎯 v5.3.0 Updates",
+        value="• **Quest Reset**: %resetquests to wipe all quest progress safely\n"
+              "• **Global Level Reset**: %resetalllevels for fresh server start\n"
+              "• **Lifetime Stats**: %setlifetime for cosmetic flex stats (display-only)\n"
+              "• **Comprehensive Admin Commands**: 35+ admin tools for server management\n"
+              "• **Fixed Level 99 Bug**: New users now correctly start at level 1\n"
+              "• **Enhanced Unique Quest System**: Photo approval, text auto-approve",
+        inline=False
+    )
+    embed.add_field(
+        name="🛠️ Admin Commands",
+        value="Use `%admin help` to see all 35+ admin-only commands including:\n"
+              "• Level/XP/Stats management (set, add, force commands)\n"
+              "• Quest reset and approval systems\n"
+              "• Server resets with cosmetic preservation\n"
+              "• Quest difficulty testing\n"
+              "• Database backup/restore",
+        inline=False
+    )
+    embed.add_field(
+        name="💾 Database Features",
+        value="• **SQLite with WAL mode** for concurrent access\n"
+              "• **Automatic backups** before major operations\n"
+              "• **Schema versioning** (currently v11)\n"
+              "• **Recovery systems** for study sessions and voice tracking",
+        inline=False
+    )
+    embed.set_footer(text="Use %help for user commands • %admin help for admin commands")
     await ctx.send(embed=embed)
 
 
@@ -5313,86 +5339,297 @@ async def help_cmd(ctx):
 
 @bot.command(name='guide')
 async def guide_cmd(ctx):
-    embed = discord.Embed(
-        title="📚 Questuza Guide",
-        description="How to level up and complete quests effectively",
+    # Create multi-page guide
+    pages = []
+    
+    # PAGE 1: XP SYSTEM & BASICS
+    page1 = discord.Embed(
+        title="📚 Questuza Guide - XP & Basics (1/5)",
+        description="How the bot works and how to earn XP",
         color=discord.Color.green())
+    page1.add_field(
+        name="💰 XP System - How to Earn XP",
+        value="""• **1 XP per unique word** - Use different vocabulary in messages!
+• **10 XP per message** - Chat to accumulate XP
+• **60 XP per minute in VC** - Spend time in voice channels
+• **Quest rewards** - Complete quests for major XP gains (300-300,000 XP)
+• **Multipliers** - Stack multipliers for exponential gains!""",
+        inline=False)
+    page1.add_field(
+        name="📊 XP Multiplier System",
+        value="""Base multiplier: **1.0x**
++ Daily quests completed: **+0.1x** (max 1.1x)
++ Weekly quests completed: **+0.25x** (max 1.35x total)
 
-    guide_text = """
-    **💰 XP System - How to Earn XP**
-    • **1 XP per unique word** - Use different vocabulary in messages!
-    • **10 XP per message** - Chat to accumulate XP
-    • **60 XP per minute in VC** - Spend time in voice channels
-    • **Quest rewards** - Complete quests for major XP gains (100-50000 XP)
-    • **Multipliers** - Boost XP with quest completion bonuses
+**How it works:**
+• 1 unique word × 1.35x = 1.35 XP
+• 10 message XP × 1.35x = 13.5 XP
+• Complete both daily AND weekly = 1.35x multiplier
+• Multiplier applies to ALL XP sources (words, messages, VC, quests)""",
+        inline=False)
+    page1.add_field(
+        name="📈 How to Level Up",
+        value="""Each level requires XP. As you level:
+• Your level increases
+• Profile shows your progression
+• Unique quests unlock at Level 11+
+• Special quests available at all levels
+• Higher levels = bigger XP requirements
+
+Use `%profile` to see your current level and progress!""",
+        inline=False)
+    pages.append(page1)
     
-    **📊 Total XP Multiplier Breakdown**
-    Base multiplier: 1.0x
-    + Daily quests completed: +0.1x (up to 1.1x)
-    + Weekly quests completed: +0.25x (up to 1.35x total)
-    Examples:
-    • 1 unique word with 1.35x multiplier = 1.35 XP total
-    • 10 message XP with 1.1x multiplier = 11 XP total
-    • Quest reward with multipliers stacked = Big gains!
+    # PAGE 2: DAILY & WEEKLY QUESTS
+    page2 = discord.Embed(
+        title="📚 Questuza Guide - Daily & Weekly Quests (2/5)",
+        description="Recurring quests that reset regularly",
+        color=discord.Color.blue())
+    page2.add_field(
+        name="📅 DAILY QUESTS - Reset Every 24 Hours",
+        value="""**Available Daily Quests (5 total):**
+1. 💬 **Daily Chatter** (20 messages) → 300 XP
+2. 📝 **Word Wizard** (50 unique words) → 400 XP
+3. 🎤 **Voice Active** (30 min VC) → 500 XP
+4. 🦋 **Social Butterfly** (5 different channels) → 350 XP
+5. 🤝 **Helpful Hand** (10 replies to different users) → 450 XP
 
-    **📈 Leveling System**
-    Each level requires progress in FOUR areas:
-    • **Unique Words** - Track new vocabulary
-    • **Voice Chat Time** - Spend time in VC channels
-    • **Messages Sent** - Keep chatting
-    • **Quests Completed** - Finish quest objectives
+**Total Daily Potential:** Up to 2,000 XP/day (plus multipliers)
+**Claim Window:** 24 hours after completion
+**Use:** `%quests daily` to view
+**Claim:** `%claim <quest_id>` for 100% XP""",
+        inline=False)
+    page2.add_field(
+        name="📆 WEEKLY QUESTS - Reset Every 7 Days",
+        value="""**Available Weekly Quests (5 total):**
+1. 📚 **Word Master** (500 unique words) → 2,000 XP
+2. 🏆 **Voice Champion** (5 hours VC) → 2,500 XP
+3. 🌟 **Community Builder** (100 messages) → 1,800 XP
+4. 🗺️ **Channel Explorer** (15 different channels) → 2,200 XP
+5. 👑 **Consistency King** (5 different active days) → 2,800 XP
 
-    **🎯 Quest System**
-    • **Daily Quests** - Reset every day (24hr claim window)
-    • **Weekly Quests** - Reset weekly (7 day claim window)
-    • **Achievement Quests** - One-time permanent goals
-    • **Special Quests** - Rare and legendary challenges
+**Total Weekly Potential:** Up to 11,300 XP/week (plus multipliers)
+**Claim Window:** 7 days after completion
+**Use:** `%quests weekly` to view
+**Claim:** `%claim <quest_id>` for 100% XP""",
+        inline=False)
+    pages.append(page2)
     
-    **💰 Claiming Rewards (3 Options)**
-    1. **Manual Claim** (`%claim <quest_id>`): **100% XP** ✅ BEST!
-    2. **Bulk Claim** (`%claimall`): **85% XP** (15% fee) - Claim all at once
-    3. **Auto-Claim** (`%autoclaim on`): **70% XP** (30% fee) - Automatic rewards
-    4. **Expired (automatic)**: **10% XP** - Auto-collected if unclaimed
-       • Daily quests: 24 hour expiration
-       • Weekly quests: 7 day expiration
+    # PAGE 3: ACHIEVEMENT & SPECIAL QUESTS
+    page3 = discord.Embed(
+        title="📚 Questuza Guide - Achievement & Special Quests (3/5)",
+        description="Permanent goals and rare challenges",
+        color=discord.Color.gold())
+    page3.add_field(
+        name="🏆 ACHIEVEMENT QUESTS - One-Time Permanent Goals",
+        value="""**Milestone-Based Achievements:**
+• 📖 **Vocabulary Expert** (1k lifetime words) → 3,000 XP
+• 📚 **Dictionary Master** (5k lifetime words) → 8,000 XP
+• ⭐ **Rising Star** (Level 10) → 5,000 XP
+• 🌟 **Community Legend** (Level 25) → 10,000 XP
+• 🎙️ **Voice Veteran** (10 total VC hours) → 4,000 XP
+
+**Characteristics:**
+• Complete once and keep forever
+• Require lifetime achievement (can't reset)
+• Spread across levels 10-25+
+• Build up your permanent portfolio
+**Use:** `%quests achievement` to view""",
+        inline=False)
+    page3.add_field(
+        name="💎 SPECIAL QUESTS - Rare & Legendary Challenges",
+        value="""**20 Special Quests Available - 4 Difficulty Tiers:**
+
+🔴 **LEGENDARY TIER** (Hardest - 5 quests):
+• Ultimate Level (Lvl 100) → 300,000 XP!
+• Server Historian (50k messages) → 150,000 XP
+• Eternal Voice (500 VC hours) → 112,500 XP
+• Mythical Wordsmith (25k words) → 75,000 XP
+• Channel Master (100 channels) → 90,000 XP
+
+🟠 **EPIC TIER** (Hard - 5 quests):
+• Level Lord (Lvl 50) → 75,000 XP
+• Message Maestro (10k messages) → 52,500 XP
+• Voice Commander (100 VC hours) → 45,000 XP
+• Channel Conqueror (50 channels) → 42,000 XP
+• Word Collector (10k words) → 37,500 XP
+
+🟡 **RARE TIER** (Medium - 5 quests):
+• Level Legend (Lvl 25) → 37,500 XP
+• Chat Champion (5k messages) → 30,000 XP
+• Voice Virtuoso (50 VC hours) → 27,000 XP
+• Word Warrior (5k words) → 22,500 XP
+• Channel Explorer (25 channels) → 18,000 XP
+
+🟢 **ULTRA-TIER** (New Super Hard - 5 quests):
+• Ancient Dragon Slayer (Lvl 75) → 125,000 XP
+• Platinum Voice Master (250 VC hrs) → 100,000 XP
+• Message Millionaire (25k messages) → 95,000 XP
+• Ultra Wordsmith (15k words) → 85,000 XP
+• Channel Emperor (75 channels) → 80,000 XP
+
+**Use:** `%quests special` to view
+**Claim:** `%claim <quest_id>` for 100% XP""",
+        inline=False)
+    pages.append(page3)
     
-    **💡 Best Strategy:** Claim manually one-by-one for 100% rewards!
+    # PAGE 4: REWARD SYSTEMS & CLAIMING
+    page4 = discord.Embed(
+        title="📚 Questuza Guide - Reward Systems (4/5)",
+        description="How to claim and maximize your quest rewards",
+        color=discord.Color.purple())
+    page4.add_field(
+        name="💰 How to Claim Quest Rewards (3 Methods)",
+        value="""**Method 1: Manual Claim** ✅ BEST OPTION!
+`%claim <quest_id>`
+• Claim one quest at a time
+• Get **100% of XP** - No fee!
+• Example: 300 XP quest = 300 XP claimed
+• Takes longer but maximizes rewards
 
-    **🔤 Word Counting Rules**
-    • Only alphabetic words count (no numbers/emojis)
-    • Case-insensitive (Hello = hello)
-    • Duplicate words same message = count once
-    • Example: "hello hello world" = 2 unique words
+**Method 2: Bulk Claim** (Medium)
+`%claimall`
+• Claim ALL unclaimed quests at once
+• Get **85% of XP** (15% fee)
+• Example: 1000 XP total = 850 XP claimed
+• Convenient when you have many quests
 
-    **🎧 Voice Chat Tracking**
-    • Automatically tracks VC time
-    • Max 5 hours per session (resets on new join)
-    • Use `%vctest` to verify tracking
-    • Orphaned sessions auto-recover after restart
+**Method 3: Auto-Claim** (Least XP)
+`%autoclaim on`
+• Automatically claims completed quests
+• Get **70% of XP** (30% fee)
+• Example: 1000 XP total = 700 XP claimed
+• Passive but loses the most XP
 
-    **🖼️ Profile Customization**
-    • `%profile` - View embed profile with stats
-    • `%banner <url>` - Set profile banner image
-    • `%color <hex>` - Set profile text color (e.g., #FF5733)
-    • Shows multipliers, level progress, and lifetime stats
+**Bonus: Expiration System**
+If you don't claim in time:
+• Daily quests expire after **24 hours**
+• Weekly quests expire after **7 days**
+• Get **10% of XP** (90% lost!)
+
+**💡 Best Strategy:** Manually claim daily quests for 100% rewards!""",
+        inline=False)
+    page4.add_field(
+        name="🌍 UNIQUE QUESTS (Level 11+ Only)",
+        value="""**What are Unique Quests?**
+Special quests that unlock at Level 11 and are required for further progression.
+
+**How They Work:**
+• Each level from 11+ has 1 unique quest requirement
+• Real-life tasks: Take photos, write stories, create art, etc.
+• Text quests auto-approve instantly
+• Photo/voice quests need admin approval
+
+**Commands:**
+• `%uniquequest list` - See available quests
+• `%uniquequest progress` - Check your progress
+• `%uniquequest submit <quest_id>` - Submit proof
+• `%bypassquest` - Skip a quest for 50,000 XP
+
+**Rewards:**
+• XP for completing
+• Lifely Points (cosmetic achievement tracker)
+• Required for leveling past Level 11""",
+        inline=False)
+    pages.append(page4)
     
-    **💡 Tips for Fast Leveling:**
-    • Chat in different channels for Social Butterfly quest
-    • Complete daily AND weekly quests for 1.35x multiplier
-    • Spend time in voice chat for big XP gains
-    • Use unique words - they're worth more XP!
-    • Use %debug to track your progress anytime
-    **🌍 Unique Quests (Level 11+)**
-    • Unique quests unlock starting at **Level 11** and are required for further progression.
-    • Use `%uniquequest list` to browse available unique quests and `%uniquequest progress` to see your progress.
-    • Submit proof with `%uniquequest submit <quest_id>` — text quests auto-approve; photo/voice quests require admin approval via `%approvequests`.
-    • Need to skip a difficult unique quest? Use `%bypassquest` to spend **50,000 XP** and mark one unique quest as bypassed.
-    • Approved unique quests award XP and Lifely Points.
+    # PAGE 5: MECHANICS & TIPS
+    page5 = discord.Embed(
+        title="📚 Questuza Guide - Mechanics & Tips (5/5)",
+        description="Learn the mechanics and level up faster",
+        color=discord.Color.orange())
+    page5.add_field(
+        name="🔤 Word Counting Rules",
+        value="""How words are counted for XP:
+• Only **alphabetic words** count (a-z, A-Z)
+• **Numbers and emojis** don't count
+• **Case-insensitive** (Hello = hello)
+• **Duplicate words in same message** count once
+• **Same word across messages** counts each time
 
-    """
+Example: "hello hello world 123 😀"
+• hello = 1 unique word
+• world = 1 unique word
+• Total = 2 unique words
+• Numbers/emojis = ignored""",
+        inline=False)
+    page5.add_field(
+        name="🎧 Voice Chat Tracking",
+        value="""How VC time works:
+• **Automatic tracking** - Bot tracks while you're in VC
+• **Max 5 hours per session** - Resets when you leave and rejoin
+• **Accurate to the second** - All time counts
+• Use `%vctest` - Test and verify tracking
+• **Auto-recovery** - Orphaned sessions recovered on bot restart
 
-    embed.description = guide_text
-    await ctx.send(embed=embed)
+What counts:
+• Time spent in any voice channel
+• Works even if you're muted/deafened
+• Counts for daily, weekly, and achievement quests""",
+        inline=False)
+    page5.add_field(
+        name="🖼️ Profile Customization",
+        value="""Make your profile unique:
+• `%profile` - View your full profile embed
+• `%banner <url>` - Set a custom banner image
+• `%color <hex>` - Set profile text color (e.g., #FF5733)
+• Shows level, XP, multiplier, cosmetics
+
+Example: `%color #FF0000` (red profile)""",
+        inline=False)
+    page5.add_field(
+        name="⚡ Tips for Fast Leveling",
+        value="""Maximize your XP gains:
+1. **Stack Multipliers** - Complete daily AND weekly quests → 1.35x multiplier
+2. **Chat Everywhere** - Use different channels for Social Butterfly quest
+3. **Voice First** - VC gives 60 XP/min = most XP/time investment
+4. **Unique Words** - Use varied vocabulary for extra XP
+5. **Manual Claims** - Always claim quests individually for 100% XP
+6. **Use %debug** - Check your stats and progress anytime
+7. **Daily Routine** - Complete all 5 daily quests daily (~2000 XP base)
+8. **Weekly Grind** - Finish weekly quests for 11,300 XP/week
+9. **Special Quests** - Long-term goals, work on them steadily
+10. **Track Progress** - Use `%profile` and `%questprogress <id>` often""",
+        inline=False)
+    page5.add_field(
+        name="❓ Useful Commands",
+        value="""Quick reference:
+• `%quests <type>` - View quests (daily/weekly/achievement/special/all)
+• `%questprogress <id>` - Check progress with progress bars
+• `%claim <id>` - Claim single quest (100% XP)
+• `%claimall` - Claim all at once (85% XP)
+• `%profile` - View your profile and stats
+• `%help` - See all available commands
+• `%debug` - Check detailed tracking stats
+• `%guide` - Show this guide again""",
+        inline=False)
+    pages.append(page5)
+    
+    # Send all pages with pagination
+    class GuideView(discord.ui.View):
+        def __init__(self, pages_list):
+            super().__init__()
+            self.pages = pages_list
+            self.current_page = 0
+            self.update_buttons()
+        
+        def update_buttons(self):
+            self.prev_button.disabled = self.current_page == 0
+            self.next_button.disabled = self.current_page == len(self.pages) - 1
+        
+        @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.gray)
+        async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_page = max(0, self.current_page - 1)
+            self.update_buttons()
+            await interaction.response.edit_message(embed=self.pages[self.current_page], view=self)
+        
+        @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.gray)
+        async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_page = min(len(self.pages) - 1, self.current_page + 1)
+            self.update_buttons()
+            await interaction.response.edit_message(embed=self.pages[self.current_page], view=self)
+    
+    await ctx.send(embed=pages[0], view=GuideView(pages))
 
 
 @bot.command(name='admin')
@@ -5416,18 +5653,38 @@ async def admin_cmd(ctx, action: str = None):
         "%admin resettracker <user>": "Reset user's XP trackers (not XP itself, just tracking systems)",
         "%syncxp <user>": "Sync XP and trigger level-up checks for a user",
         "%approvequests <pending|approve|reject> [id]": "Review and approve/reject unique quest submissions",
+        "%resetalllevels": "⚠️ NUCLEAR: Reset ALL users' levels to 1 (XP=0). Keeps cosmetics!",
+        "%resetquests": "⚠️ NUCLEAR: Reset ALL users' quest progress (doesn't affect levels/XP/stats)",
+        "%setlifetime <user> <words|messages|vc> <amount>": "Set lifetime cosmetic stat (display-only flex stat)",
         "%forcevc <user> <seconds>": "Force add VC time to a user",
         "%forcelevel <user> <level>": "Force set a user's level",
         "%forcexp <user> <amount>": "Force add XP to a user",
         "%forcewords <user> <amount>": "Force add words to a user",
         "%forcemessages <user> <amount>": "Force add messages to a user",
         "%forcequests <user> <amount>": "Force add quests completed to a user",
-        "%trivia <action>": "Manage trivia questions and sessions",
+        "%setxp <user> <amount>": "Set user's XP to exact amount",
+        "%setvc <user> <seconds>": "Set user's VC seconds to exact amount",
+        "%setwords <user> <amount>": "Set user's words to exact amount",
+        "%setmessages <user> <amount>": "Set user's messages to exact amount",
+        "%addxp <user> <amount>": "Add XP to user",
+        "%addvc <user> <seconds>": "Add VC time to user",
+        "%addwords <user> <amount>": "Add words to user",
+        "%addmessages <user> <amount>": "Add messages to user",
+        "%resetstats <user>": "Reset all stats for a user (xp, vc, words, messages to 0)",
+        "%trivia [action]": "Manage trivia questions and sessions",
+        "%testmessages [user]": "Test message counting",
+        "%testchannels [user]": "Test channel tracking",
+        "%testimages [user]": "Test image tracking",
+        "%testdaily [user]": "Test daily quest reset",
         "%testweekly [user]": "Test weekly quest reset",
         "%testlevel [user]": "Test leveling system calculations",
         "%testall [user]": "Run all tracker tests",
-        "%resetalllevels": "⚠️ NUCLEAR: Reset ALL users' levels to 1 (XP=0). Keeps cosmetics! Use with caution.",
-        "%setlifetime <user> <words|messages|vc> <amount>": "Set lifetime cosmetic stat (display-only, flex stat)",
+        "%createquest [name] [description] [xp] [type]": "Create custom quest",
+        "%editquest <quest_id> [field] [value]": "Edit custom quest",
+        "%deletequest <quest_id>": "Delete custom quest",
+        "%listcustomquests": "List all custom quests",
+        "%backup": "Create database backup",
+        "%listbackups": "List all backups",
     }
 
     for cmd, desc in admin_commands.items():
@@ -5554,6 +5811,77 @@ async def setlifetime_cmd(ctx, member: discord.Member = None, stat: str = None, 
     
     await ctx.send(embed=embed)
     logging.info(f"[SETLIFETIME] Admin {ctx.author} set {member}'s {stat} to {amount_int}")
+
+
+@bot.command(name='resetquests')
+@commands.has_permissions(administrator=True)
+async def resetquests_cmd(ctx):
+    """⚠️ Reset ALL users' quest progress. Lifetime stats unaffected. Quests restart fresh."""
+    # Confirmation embed
+    embed = discord.Embed(
+        title="⚠️ WARNING: Quest Reset",
+        description="This will reset **ALL users' quest progress** without affecting levels, XP, or lifetime stats.",
+        color=discord.Color.red()
+    )
+    embed.add_field(name="What happens:", value="• All quest progress → 0\n• All claimed status → False\n• Daily/weekly/monthly timers reset\n• Special quests reset\n• Levels, XP, lifetime stats: **Unaffected**", inline=False)
+    embed.add_field(name="Proceed?", value="React with ✅ within 10 seconds to confirm", inline=False)
+    
+    msg = await ctx.send(embed=embed)
+    await msg.add_reaction("✅")
+    await msg.add_reaction("❌")
+    
+    def check(reaction, user):
+        return user == ctx.author and str(reaction.emoji) in ["✅", "❌"] and reaction.message.id == msg.id
+    
+    try:
+        reaction, user = await bot.wait_for("reaction_add", timeout=10.0, check=check)
+        if str(reaction.emoji) != "✅":
+            await ctx.send("❌ Quest reset cancelled.")
+            return
+    except asyncio.TimeoutError:
+        await ctx.send("❌ Quest reset cancelled (timeout).")
+        return
+    
+    # Perform reset
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    try:
+        # Get quest progress count
+        c.execute('SELECT COUNT(*) FROM quests_progress WHERE guild_id = ?', (ctx.guild.id,))
+        progress_count = c.fetchone()[0]
+        
+        # Delete ALL quest progress for all users
+        c.execute('DELETE FROM quests_progress WHERE guild_id = ?', (ctx.guild.id,))
+        
+        # Reset daily/weekly reset timestamps for all users
+        c.execute('''UPDATE users 
+                     SET last_daily_reset = NULL, last_weekly_reset = NULL
+                     WHERE guild_id = ?''',
+                  (ctx.guild.id,))
+        
+        conn.commit()
+        
+        embed = discord.Embed(
+            title="✅ Quest Reset Complete!",
+            description=f"Reset **{progress_count}** quest progress entries",
+            color=discord.Color.green()
+        )
+        embed.add_field(
+            name="Summary", 
+            value=f"• Quest progress entries deleted: {progress_count}\n• Daily/weekly timers reset\n• Special quests reset\n• Levels & XP: Preserved ✓\n• Lifetime stats: Preserved ✓",
+            inline=False
+        )
+        embed.set_footer(text="Quests restart fresh! 🎯")
+        
+        await ctx.send(embed=embed)
+        logging.info(f"[RESETQUESTS] Admin {ctx.author} reset {progress_count} quest progress entries")
+        
+    except Exception as e:
+        logging.error(f"Error in resetquests: {e}")
+        await ctx.send(f"❌ Error during reset: {str(e)[:100]}")
+    finally:
+        conn.close()
 
 
 @bot.command(name='quests')
