@@ -315,10 +315,19 @@ def get_xp_for_next_level(current_xp: int, current_level: int) -> int:
     return LEVEL_REQUIREMENTS[next_level] - current_xp
 
 def get_level_from_xp(total_xp: int) -> int:
-    """Get user's level from total XP"""
-    for level in range(100, 0, -1):
-        if total_xp >= LEVEL_REQUIREMENTS.get(level, 0):
-            return level
+    """Get user's level from total XP.
+
+    Iterate only over defined LEVEL_REQUIREMENTS breakpoints (descending).
+    This avoids treating missing level keys as zero-requirement levels
+    which could incorrectly assign very high levels to new users.
+    """
+    try:
+        # Sort defined levels descending and find highest level where requirement <= total_xp
+        for level, req in sorted(LEVEL_REQUIREMENTS.items(), key=lambda kv: kv[0], reverse=True):
+            if total_xp >= req:
+                return level
+    except Exception:
+        pass
     return 1
 
 def get_unique_quest_for_level(level: int) -> dict or None:

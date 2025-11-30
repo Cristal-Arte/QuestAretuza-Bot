@@ -1923,7 +1923,7 @@ async def on_message(message):
                 try:
                     await message.channel.send(embed=embed)
                 except Exception as e:
-            logging.debug(f"Exception caught: {e}")
+                    logging.debug(f"Exception caught: {e}")
 
     await check_level_up(message.author, message.guild)
     await bot.process_commands(message)
@@ -2906,7 +2906,7 @@ async def study_cmd(ctx, action: str = None, *, args: str = None):
                     try:
                         os.remove(img_path)
                     except Exception as e:
-            logging.debug(f"Exception caught: {e}")
+                        logging.debug(f"Exception caught: {e}")
 
                     # Delete status message
                     await status_msg.delete()
@@ -3445,7 +3445,7 @@ async def study_cmd(ctx, action: str = None, *, args: str = None):
                     import os
                     os.remove(img_path)
                 except Exception as e:
-            logging.debug(f"Exception caught: {e}")
+                    logging.debug(f"Exception caught: {e}")
 
                 await status_msg.delete()
 
@@ -5259,6 +5259,8 @@ async def help_cmd(ctx):
     page1.add_field(name="%profile [user]", value="View your or someone else's profile with stats and multipliers", inline=False)
     page1.add_field(name="%quests [type]", value="View available quests\n**Types:** daily, weekly, achievement, special", inline=False)
     page1.add_field(name="%questprogress <id>", value="Check your progress on all quests with progress bars", inline=False)
+    page1.add_field(name="%uniquequest [list|progress|submit]", value="View unique quests, check progress, or submit proof (text/photo). Use `%uniquequest list` to browse.", inline=False)
+    page1.add_field(name="%bypassquest", value="Skip a unique quest by spending 50,000 XP (available rules apply)", inline=False)
     page1.add_field(name="%claim <quest_id>", value="Claim quest reward manually (100% XP)", inline=False)
     page1.add_field(name="%claimall", value="Claim all completed quests at once (85% XP, 15% fee)", inline=False)
     page1.add_field(name="%autoclaim [on/off]", value="Toggle auto-claim (70% XP, 30% fee)", inline=False)
@@ -5298,6 +5300,7 @@ async def help_cmd(ctx):
     page3.add_field(name="%version", value="Check bot version and recent changes", inline=False)
     page3.add_field(name="%guide", value="Detailed guide on leveling and mechanics", inline=False)
     page3.add_field(name="%admin help", value="View admin-only commands (admins only)", inline=False)
+    page3.add_field(name="%approvequests pending|approve|reject", value="Admin: review and handle pending unique quest submissions", inline=False)
     
     page3.add_field(name="💡 Tips", 
         value="• Type in different channels to progress the Social Butterfly quest\n• Use %quests to see all available quests\n• React to auto-start features (trivia, daily resets)\n• Check multipliers to understand your XP gains",
@@ -5379,6 +5382,13 @@ async def guide_cmd(ctx):
     • Spend time in voice chat for big XP gains
     • Use unique words - they're worth more XP!
     • Use %debug to track your progress anytime
+    **🌍 Unique Quests (Level 11+)**
+    • Unique quests unlock starting at **Level 11** and are required for further progression.
+    • Use `%uniquequest list` to browse available unique quests and `%uniquequest progress` to see your progress.
+    • Submit proof with `%uniquequest submit <quest_id>` — text quests auto-approve; photo/voice quests require admin approval via `%approvequests`.
+    • Need to skip a difficult unique quest? Use `%bypassquest` to spend **50,000 XP** and mark one unique quest as bypassed.
+    • Approved unique quests award XP and Lifely Points.
+
     """
 
     embed.description = guide_text
@@ -5990,7 +6000,7 @@ async def delete_quest_cmd(ctx, quest_id: str):
     try:
         await confirm_msg.delete()
     except Exception as e:
-            logging.debug(f"Exception caught: {e}")
+        logging.debug(f"Exception caught: {e}")
 
 
 @bot.command(name='listcustomquests')
@@ -9363,7 +9373,7 @@ async def on_message(message):
                 try:
                     await message.channel.send(embed=embed)
                 except Exception as e:
-            logging.debug(f"Exception caught: {e}")
+                    logging.debug(f"Exception caught: {e}")
 
     await check_level_up(message.author, message.guild)
     await bot.process_commands(message)
