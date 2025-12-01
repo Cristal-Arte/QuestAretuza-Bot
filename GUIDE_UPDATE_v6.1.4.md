@@ -165,4 +165,6 @@ This displays the first page. Use the **Next ▶** button to navigate through al
 
 **Updated:** January 2025  
 **Version:** 6.1.4  
-**Status:** ✅ Complete
+**Status:** ✅ Complete 
+
+**Note:** The `Social Butterfly` daily quest (`daily_social`) was found to be unreliable on some servers due to channel-tracking edge cases. It has been replaced with `daily_conversationalist` (Send 10 messages today) to ensure reliable daily progression. The old quest entry is retained in code for compatibility where appropriate.
