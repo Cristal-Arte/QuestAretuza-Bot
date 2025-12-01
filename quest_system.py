@@ -86,14 +86,15 @@ DAILY_QUESTS = [
         requirements={"daily_vc_minutes": 30},
         emoji="🎤"
     ),
+    # Added replacement: more reliable daily quest using daily_messages
     Quest(
-        quest_id="daily_social",
-        name="Social Butterfly",
-        description="Chat in 5 different channels today",
+        quest_id="daily_conversationalist",
+        name="Conversationalist",
+        description="Send 10 messages today",
         quest_type=QuestType.DAILY,
-        xp_reward=350,
-        requirements={"daily_channels": 5},
-        emoji="🦋"
+        xp_reward=300,
+        requirements={"daily_messages": 10},
+        emoji="🗨️"
     ),
     Quest(
         quest_id="daily_helper",
