@@ -1,29 +1,32 @@
 import discord
 from discord.ext import commands, tasks
+from discord import ui
 import sqlite3
 import datetime
-from typing import Dict
+from typing import Dict, List
 import re
 import os
+import asyncio
+import json
 from flask import Flask, request, jsonify
 import logging
-import nacl.signing
-import nacl.exceptions
 from threading import Thread
-from quest_system import (
-    init_quest_tables, get_all_quests, get_quests_by_type, get_quest_by_id,
-    check_and_complete_quests, claim_quest_reward, update_daily_stats,
-    update_weekly_stats, QuestType, get_user_quest_progress, reset_daily_quests,
-    reset_weekly_quests
-)
+import io
+from quest_system import (init_quest_tables, get_all_quests,
+                          get_quests_by_type, get_quest_by_id,
+                          check_and_complete_quests, claim_quest_reward,
+                          update_daily_stats, update_weekly_stats, QuestType,
+                          get_user_quest_progress)
+from level_system import (LEVEL_REQUIREMENTS, UNIQUE_QUESTS, get_xp_for_level,
+                          get_level_from_xp, get_unique_quest_for_level,
+                          get_required_unique_quests_count)
 from PIL import Image, ImageDraw, ImageFont
 import requests
 from io import BytesIO
-import fitz  # PyMuPDF for PDF handling
-import re
+# import fitz  # PyMuPDF for PDF handling - Optional, install if needed: pip install PyMuPDF
 
 # Bot version - Update this when making changes
-VERSION = "5.0.0"
+VERSION = "6.1.4"
 
 # Flask app for uptime monitoring
 flask_app = Flask('questuza-health')
@@ -318,11 +321,7 @@ def init_db():
             ('card_font_size', 'REAL DEFAULT 33.0'),  # Font size multiplier
             ('custom_pfp_url', 'TEXT'),  # Custom profile picture URL
         ]
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> 779a7d683e1573c179c55d2e09aabeabd7af110c
         for col_name, col_type in columns_to_add:
             try:
                 c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
@@ -332,71 +331,10 @@ def init_db():
                     print(f"✅ Column {col_name} already exists, skipping...")
                 else:
                     raise
-<<<<<<< HEAD
 
     # Insert/update version info
-    version_to_set = 9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version)
-    c.execute(
-        '''INSERT OR REPLACE INTO db_version (version, updated_at)
-=======
-            try:
-                c.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
-                print(f"✅ Added column: {col_name}")
-            except sqlite3.OperationalError as e:
-                if "duplicate column" in str(e).lower():
-                    print(f"✅ Column {col_name} already exists, skipping...")
-                else:
-                    raise
-
-    # Version 10: Add study system tables
-    if current_version < 10:
-        print("📚 Adding study system tables...")
-
-        # Study sessions table (active sessions)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_sessions
-                      (user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                       start_time TEXT, last_activity TEXT,
-                       PRIMARY KEY (user_id, guild_id))''')
-
-        # Study history table (completed sessions)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_history
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       study_type TEXT, subject TEXT, mood TEXT, intended_duration INTEGER,
-                       start_time TEXT, end_time TEXT, actual_duration INTEGER,
-                       completed INTEGER DEFAULT 0)''')
-
-        # Study answers table (for MCQ practice)
-        c.execute('''CREATE TABLE IF NOT EXISTS study_answers
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER, session_id TEXT,
-                       question_number INTEGER, answer TEXT, is_correct INTEGER,
-                       timestamp TEXT)''')
-
-        # Study bookmarks table
-        c.execute('''CREATE TABLE IF NOT EXISTS study_bookmarks
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       user_id INTEGER, guild_id INTEGER,
-                       title TEXT, url TEXT, category TEXT,
-                       created_at TEXT)''')
-
-        # Indexes for study tables
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_sessions_user
-                      ON study_sessions(user_id, guild_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_history_user
-                      ON study_history(user_id, guild_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_answers_session
-                      ON study_answers(user_id, guild_id, session_id)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_study_bookmarks_user
-                      ON study_bookmarks(user_id, guild_id)''')
-
-        print("✅ Study system tables created successfully")
-
-    # Insert/update version info
-    version_to_set = 10 if current_version < 10 else (9 if current_version < 9 else (8 if current_version < 8 else 7 if current_version < 7 else current_version))
+    version_to_set = 10 if current_version < 10 else current_version
     c.execute('''INSERT OR REPLACE INTO db_version (version, updated_at)
->>>>>>> 779a7d683e1573c179c55d2e09aabeabd7af110c
                  VALUES (?, ?)''', (version_to_set, datetime.datetime.now().isoformat()))
 
     conn.commit()
@@ -871,77 +809,86 @@ def validate_pdf_url(url):
     except:
         return False
 
+# def extract_pdf_text(url):
+#     """Extract text from a PDF URL - Requires PyMuPDF (fitz)"""
+#     # try:
+#     #     response = requests.get(url, timeout=30)
+#     #     response.raise_for_status()
+#     #
+#     #     # Save to temporary file
+#     #     with open('temp_pdf.pdf', 'wb') as f:
+#     #         f.write(response.content)
+#     #
+#     #     # Extract text using PyMuPDF
+#     #     doc = fitz.open('temp_pdf.pdf')
+#     #     text = ""
+#     #     for page in doc:
+#     #         text += page.get_text()
+#     #     doc.close()
+#     #
+#     #     # Clean up
+#     #     import os
+#     #     os.remove('temp_pdf.pdf')
+#     #
+#     #     return text
+#     # except Exception as e:
+#     #     print(f"Error extracting PDF text: {e}")
+#     #     return None
+
+
+# def render_pdf_page(url, page_num=0, zoom=2.0):
+#     """Render a PDF page as an image - Requires PyMuPDF (fitz)"""
+#     # try:
+#     #     response = requests.get(url, timeout=30)
+#     #     response.raise_for_status()
+#     #
+#     #     # Save to temporary file
+#     #     with open('temp_pdf.pdf', 'wb') as f:
+#     #         f.write(response.content)
+#     #
+#     #     # Open PDF and render page
+#     #     doc = fitz.open('temp_pdf.pdf')
+#     #
+#     #     if page_num >= doc.page_count:
+#     #         doc.close()
+#     #         os.remove('temp_pdf.pdf')
+#     #         return None, f"Page {page_num + 1} does not exist. PDF has {doc.page_count} pages."
+#     #
+#     #     page = doc.load_page(page_num)
+#     #
+#     #     # Render page to image
+#     #     matrix = fitz.Matrix(zoom, zoom)  # Scale factor
+#     #     pix = page.get_pixmap(matrix=matrix)
+#     #
+#     #     # Save as PNG
+#     #     img_path = f'temp_page_{page_num}.png'
+#     #     pix.save(img_path)
+#     #
+#     #     doc.close()
+#     #     os.remove('temp_pdf.pdf')
+#     #
+#     #     return img_path, None
+# except Exception as e:
+#     print(f"Error rendering PDF page: {e}")
+#     # Clean up any temp files
+#     try:
+#         os.remove('temp_pdf.pdf')
+#     except:
+#         pass
+#     try:
+#         os.remove(f'temp_page_{page_num}.png')
+#     except:
+#         pass
+#     return None, str(e)
+
+# Stub functions for PDF support (require PyMuPDF to be installed)
 def extract_pdf_text(url):
-    """Extract text from a PDF URL"""
-    try:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-
-        # Save to temporary file
-        with open('temp_pdf.pdf', 'wb') as f:
-            f.write(response.content)
-
-        # Extract text using PyMuPDF
-        doc = fitz.open('temp_pdf.pdf')
-        text = ""
-        for page in doc:
-            text += page.get_text()
-        doc.close()
-
-        # Clean up
-        import os
-        os.remove('temp_pdf.pdf')
-
-        return text
-    except Exception as e:
-        print(f"Error extracting PDF text: {e}")
-        return None
-
+    """Stub: PDF text extraction requires PyMuPDF. Install with: pip install PyMuPDF"""
+    return None
 
 def render_pdf_page(url, page_num=0, zoom=2.0):
-    """Render a PDF page as an image"""
-    try:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-
-        # Save to temporary file
-        with open('temp_pdf.pdf', 'wb') as f:
-            f.write(response.content)
-
-        # Open PDF and render page
-        doc = fitz.open('temp_pdf.pdf')
-
-        if page_num >= doc.page_count:
-            doc.close()
-            os.remove('temp_pdf.pdf')
-            return None, f"Page {page_num + 1} does not exist. PDF has {doc.page_count} pages."
-
-        page = doc.load_page(page_num)
-
-        # Render page to image
-        matrix = fitz.Matrix(zoom, zoom)  # Scale factor
-        pix = page.get_pixmap(matrix=matrix)
-
-        # Save as PNG
-        img_path = f'temp_page_{page_num}.png'
-        pix.save(img_path)
-
-        doc.close()
-        os.remove('temp_pdf.pdf')
-
-        return img_path, None
-    except Exception as e:
-        print(f"Error rendering PDF page: {e}")
-        # Clean up any temp files
-        try:
-            os.remove('temp_pdf.pdf')
-        except:
-            pass
-        try:
-            os.remove(f'temp_page_{page_num}.png')
-        except:
-            pass
-        return None, str(e)
+    """Stub: PDF rendering requires PyMuPDF. Install with: pip install PyMuPDF"""
+    return None, "PDF support requires PyMuPDF. Install with: pip install PyMuPDF"
 
 def parse_answer_key(text, pattern=None):
     """Parse answer key from PDF text using comprehensive patterns"""
@@ -1464,10 +1411,18 @@ async def on_message(message):
         # Update last message record for this channel
         LAST_USER_MESSAGE[key] = {'author_id': message.author.id, 'content': normalized}
 
-        # If it's a consecutive duplicate outside spam channel => punish (deduct XP by removing equivalent lifetime words)
+        # If it's a consecutive duplicate outside spam channel => punish
+        # We'll compute awarded XP per-message so we can consistently add/deduct it.
+        # XP rules (consistent with guide):
+        #  - 1 XP per unique word
+        #  - 10 XP base per message
+        awarded_xp = 0
+
         if is_consecutive_duplicate and message.channel.id != SPAM_CHANNEL_ID:
-            # Deduct the XP equivalent by subtracting lifetime words (10 XP per word -> 1 word = 10 XP)
-            user_data['lifetime_words'] = user_data.get('lifetime_words', 0) - xp_word_count
+            # Deduct the XP that would have been awarded for this message
+            awarded_xp = (min(50, total_words) * 1) + 10
+            user_data['lifetime_words'] = max(0, user_data.get('lifetime_words', 0) - xp_word_count)
+            user_data['xp'] = max(0, user_data.get('xp', 0) - int(awarded_xp))
             # Still count the message as a message for stats
             user_data['messages_sent'] += 1
         else:
@@ -1476,13 +1431,17 @@ async def on_message(message):
             # Keep unique words tracking (used by quests)
             user_data['unique_words'] += unique_words
 
-            # If this is the spam channel, award heavily reduced XP: 1 XP per 100 words (so add to xp directly)
+            # If this is the spam channel, award heavily reduced XP: 1 XP per 100 words
             if message.channel.id == SPAM_CHANNEL_ID:
                 spam_xp = xp_word_count // 100  # integer division: 1 XP per 100 words
                 if spam_xp:
-                    user_data['xp'] = user_data.get('xp', 0) + spam_xp
+                    awarded_xp = spam_xp
+                    user_data['xp'] = user_data.get('xp', 0) + awarded_xp
             else:
-                # For regular channels, add xp via lifetime_words (10 XP per word)
+                # For regular channels, award per-guide: 1 XP per unique word + 10 XP base per message
+                awarded_xp = unique_words * 1 + 10
+                user_data['xp'] = user_data.get('xp', 0) + int(awarded_xp)
+                # Keep lifetime_words as the rolling words counter (used by achievements)
                 user_data['lifetime_words'] = user_data.get('lifetime_words', 0) + xp_word_count
 
         # Track channel usage
@@ -1672,6 +1631,11 @@ async def on_voice_state_update(member, before, after):
                 user_data = create_default_user(member.id, member.guild.id)
 
             user_data['vc_seconds'] += int(capped_duration)
+            # Award XP for voice time: 60 XP per minute (consistent with guide)
+            vc_minutes = int(capped_duration) // 60
+            if vc_minutes > 0:
+                vc_award = vc_minutes * 60
+                user_data['xp'] = user_data.get('xp', 0) + vc_award
             update_user_data(user_data)
             print(f"⏱️ Added {int(capped_duration)}s VC time to {member}")
 
@@ -3486,11 +3450,17 @@ async def profile_cmd(ctx, member: discord.Member = None):
         embed.add_field(name="🔥 XP Multipliers", value=multiplier_text, inline=False)
 
     if next_req and next_level <= 100:
+        # Show remaining to level up (requirement - current, floored at 0)
+        rem_words = max(0, next_req['words'] - user_data.get('unique_words', 0))
+        rem_vc = max(0, next_req['vc_minutes'] - (user_data.get('vc_seconds', 0) // 60))
+        rem_msg = max(0, next_req['messages'] - user_data.get('messages_sent', 0))
+        rem_quests = max(0, next_req['quests'] - user_data.get('quests_completed', 0))
+
         progress_text = (
-            f"**Words:** {user_data['unique_words']}/{next_req['words']}\n"
-            f"**VC Time:** {user_data['vc_seconds']//60}/{next_req['vc_minutes']}m\n"
-            f"**Messages:** {user_data['messages_sent']}/{next_req['messages']}\n"
-            f"**Quests:** {user_data['quests_completed']}/{next_req['quests']}"
+            f"**Words:** {user_data.get('unique_words', 0)}/{next_req['words']} (need {rem_words})\n"
+            f"**VC Time:** {user_data.get('vc_seconds', 0)//60}/{next_req['vc_minutes']}m (need {rem_vc}m)\n"
+            f"**Messages:** {user_data.get('messages_sent', 0)}/{next_req['messages']} (need {rem_msg})\n"
+            f"**Quests:** {user_data.get('quests_completed', 0)}/{next_req['quests']} (need {rem_quests})"
         )
     else:
         progress_text = "🎉 Max Level Reached!"
@@ -4287,7 +4257,7 @@ async def debug_cmd(ctx):
 @bot.command(name='forcevc')
 async def force_vc_cmd(ctx, seconds: int):
     """Force add VC time for testing (owner only)"""
-    if ctx.author.id != YOUR_USER_ID_HERE:  # Replace with your Discord ID
+    if not await bot.is_owner(ctx.author):
         await ctx.send("❌ This command is for bot owner only!")
         return
 
@@ -4542,10 +4512,7 @@ async def help_cmd(ctx):
         "%banner <url>": "Set profile banner for embed (Level 1+)",
         "%color <hex>": "Change profile color for embed",
         "%leaderboard [category] [page]": "View leaderboards (overall/words/vc/quests/xp)",
-<<<<<<< HEAD
-=======
         "%export [type]": "Export your data (study/user/all) as JSON",
->>>>>>> 779a7d683e1573c179c55d2e09aabeabd7af110c
         "%version": "Check bot version and changelog",
         "%guide": "Learn how the bot works",
         "%admin help": "View admin-only commands"
@@ -4570,73 +4537,297 @@ async def help_cmd(ctx):
 
 @bot.command(name='guide')
 async def guide_cmd(ctx):
-    embed = discord.Embed(
-        title="📚 Questuza Guide",
-        description="How to level up and complete quests effectively",
+    # Create multi-page guide
+    pages = []
+    
+    # PAGE 1: XP SYSTEM & BASICS
+    page1 = discord.Embed(
+        title="📚 Questuza Guide - XP & Basics (1/5)",
+        description="How the bot works and how to earn XP",
         color=discord.Color.green())
+    page1.add_field(
+        name="💰 XP System - How to Earn XP",
+        value="""• **1 XP per unique word** - Use different vocabulary in messages!
+• **10 XP per message** - Chat to accumulate XP
+• **60 XP per minute in VC** - Spend time in voice channels
+• **Quest rewards** - Complete quests for major XP gains (300-300,000 XP)
+• **Multipliers** - Stack multipliers for exponential gains!""",
+        inline=False)
+    page1.add_field(
+        name="📊 XP Multiplier System",
+        value="""Base multiplier: **1.0x**
++ Daily quests completed: **+0.1x** (max 1.1x)
++ Weekly quests completed: **+0.25x** (max 1.35x total)
 
-    guide_text = """
-    **📈 Leveling System**
-    • Track **unique words** per message (minimum 2)
-    • Time spent in **voice channels**
-    • Complete **creative quests**
-    • All activities contribute to XP
+**How it works:**
+• 1 unique word × 1.35x = 1.35 XP
+• 10 message XP × 1.35x = 13.5 XP
+• Complete both daily AND weekly = 1.35x multiplier
+• Multiplier applies to ALL XP sources (words, messages, VC, quests)""",
+        inline=False)
+    page1.add_field(
+        name="📈 How to Level Up",
+        value="""Each level requires XP. As you level:
+• Your level increases
+• Profile shows your progression
+• Unique quests unlock at Level 11+
+• Special quests available at all levels
+• Higher levels = bigger XP requirements
 
-    **🎯 Quest System**
-    • **Daily Quests** - Reset every day, earn 1.1x XP multiplier
-    • **Weekly Quests** - Reset weekly, earn 1.25x XP multiplier
-    • **Achievement Quests** - One-time permanent goals
+Use `%profile` to see your current level and progress!""",
+        inline=False)
+    pages.append(page1)
     
-    **💰 Claiming Rewards (4 Options)**
-    1. **Manual Claim** (`%claim <quest_id>`): Get **100% XP** ✅ BEST!
-    2. **Bulk Claim** (`%claimall`): Get **85% XP** (15% fee) - Claim all at once!
-    3. **Auto-Claim** (`%autoclaim on`): Get **70% XP** (30% fee) - Instant & automatic
-    4. **Expired Auto-Collection**: Get **10% XP** silently if unclaimed
-       • Daily quests expire after 24 hours
-       • Weekly quests expire after 7 days
+    # PAGE 2: DAILY & WEEKLY QUESTS
+    page2 = discord.Embed(
+        title="📚 Questuza Guide - Daily & Weekly Quests (2/5)",
+        description="Recurring quests that reset regularly",
+        color=discord.Color.blue())
+    page2.add_field(
+        name="📅 DAILY QUESTS - Reset Every 24 Hours",
+        value="""**Available Daily Quests (5 total):**
+1. 💬 **Daily Chatter** (20 messages) → 300 XP
+2. 📝 **Word Wizard** (50 unique words) → 400 XP
+3. 🎤 **Voice Active** (30 min VC) → 500 XP
+4. 🦋 **Social Butterfly** (5 different channels) → 350 XP
+5. 🤝 **Helpful Hand** (10 replies to different users) → 450 XP
+
+**Total Daily Potential:** Up to 2,000 XP/day (plus multipliers)
+**Claim Window:** 24 hours after completion
+**Use:** `%quests daily` to view
+**Claim:** `%claim <quest_id>` for 100% XP""",
+        inline=False)
+    page2.add_field(
+        name="📆 WEEKLY QUESTS - Reset Every 7 Days",
+        value="""**Available Weekly Quests (5 total):**
+1. 📚 **Word Master** (500 unique words) → 2,000 XP
+2. 🏆 **Voice Champion** (5 hours VC) → 2,500 XP
+3. 🌟 **Community Builder** (100 messages) → 1,800 XP
+4. 🗺️ **Channel Explorer** (15 different channels) → 2,200 XP
+5. 👑 **Consistency King** (5 different active days) → 2,800 XP
+
+**Total Weekly Potential:** Up to 11,300 XP/week (plus multipliers)
+**Claim Window:** 7 days after completion
+**Use:** `%quests weekly` to view
+**Claim:** `%claim <quest_id>` for 100% XP""",
+        inline=False)
+    pages.append(page2)
     
-    **💡 Best Strategy:** Claim manually one-by-one for maximum rewards!
+    # PAGE 3: ACHIEVEMENT & SPECIAL QUESTS
+    page3 = discord.Embed(
+        title="📚 Questuza Guide - Achievement & Special Quests (3/5)",
+        description="Permanent goals and rare challenges",
+        color=discord.Color.gold())
+    page3.add_field(
+        name="🏆 ACHIEVEMENT QUESTS - One-Time Permanent Goals",
+        value="""**Milestone-Based Achievements:**
+• 📖 **Vocabulary Expert** (1k lifetime words) → 3,000 XP
+• 📚 **Dictionary Master** (5k lifetime words) → 8,000 XP
+• ⭐ **Rising Star** (Level 10) → 5,000 XP
+• 🌟 **Community Legend** (Level 25) → 10,000 XP
+• 🎙️ **Voice Veteran** (10 total VC hours) → 4,000 XP
 
-    **🔥 XP Multipliers**
-    • Complete daily quests: +0.1x (1.1x total)
-    • Complete weekly quests: +0.25x (1.25x total)
-    • Stack both for maximum gains!
+**Characteristics:**
+• Complete once and keep forever
+• Require lifetime achievement (can't reset)
+• Spread across levels 10-25+
+• Build up your permanent portfolio
+**Use:** `%quests achievement` to view""",
+        inline=False)
+    page3.add_field(
+        name="💎 SPECIAL QUESTS - Rare & Legendary Challenges",
+        value="""**20 Special Quests Available - 4 Difficulty Tiers:**
 
-    **🔤 Word Counting**
-    • Only alphabetic words count
-    • Duplicates in same message don't count
-    • "hello hello" = 1 word
-    • "Hello there!" = 2 words
+🔴 **LEGENDARY TIER** (Hardest - 5 quests):
+• Ultimate Level (Lvl 100) → 300,000 XP!
+• Server Historian (50k messages) → 150,000 XP
+• Eternal Voice (500 VC hours) → 112,500 XP
+• Mythical Wordsmith (25k words) → 75,000 XP
+• Channel Master (100 channels) → 90,000 XP
 
-    **🎧 Voice Chat Tracking**
-    • Automatically tracks time in voice channels
-    • Use `%vctest` to check your VC time
-    • Time updates when you leave VC
+🟠 **EPIC TIER** (Hard - 5 quests):
+• Level Lord (Lvl 50) → 75,000 XP
+• Message Maestro (10k messages) → 52,500 XP
+• Voice Commander (100 VC hours) → 45,000 XP
+• Channel Conqueror (50 channels) → 42,000 XP
+• Word Collector (10k words) → 37,500 XP
 
-    **🖼️ Profile Customization**
-    • Level 1: Unlock banner
-    • Custom colors anytime
-    • Show off your progress!
+🟡 **RARE TIER** (Medium - 5 quests):
+• Level Legend (Lvl 25) → 37,500 XP
+• Chat Champion (5k messages) → 30,000 XP
+• Voice Virtuoso (50 VC hours) → 27,000 XP
+• Word Warrior (5k words) → 22,500 XP
+• Channel Explorer (25 channels) → 18,000 XP
+
+🟢 **ULTRA-TIER** (New Super Hard - 5 quests):
+• Ancient Dragon Slayer (Lvl 75) → 125,000 XP
+• Platinum Voice Master (250 VC hrs) → 100,000 XP
+• Message Millionaire (25k messages) → 95,000 XP
+• Ultra Wordsmith (15k words) → 85,000 XP
+• Channel Emperor (75 channels) → 80,000 XP
+
+**Use:** `%quests special` to view
+**Claim:** `%claim <quest_id>` for 100% XP""",
+        inline=False)
+    pages.append(page3)
     
-    **🎨 Profile Card Commands (`%me`)**
-    • `%me` - View your profile card (beautiful image!)
-    • `%me banner <url>` - Set background image/GIF
-    • `%me color <hex>` - Set background color
-    • `%me brightness <0-100>` - Adjust banner darkness (0% = original image)
-    • `%me padding <multiplier>` - Adjust card padding (default: 1.2x)
-    • `%me fontsize <5-999>` - Adjust font size (default: 33)
-    • `%me pfp <url>` - Set custom profile picture
-    • `%me about <text>` - Set your about me text
-    
-    **💡 Tips:**
-    • Profile cards are portrait-oriented (8x11 inches)
-    • Progress bar color matches your banner automatically
-    • Text color adapts to background brightness
-    • All settings are separate from embed profile!
-    """
+    # PAGE 4: REWARD SYSTEMS & CLAIMING
+    page4 = discord.Embed(
+        title="📚 Questuza Guide - Reward Systems (4/5)",
+        description="How to claim and maximize your quest rewards",
+        color=discord.Color.purple())
+    page4.add_field(
+        name="💰 How to Claim Quest Rewards (3 Methods)",
+        value="""**Method 1: Manual Claim** ✅ BEST OPTION!
+`%claim <quest_id>`
+• Claim one quest at a time
+• Get **100% of XP** - No fee!
+• Example: 300 XP quest = 300 XP claimed
+• Takes longer but maximizes rewards
 
-    embed.description = guide_text
-    await ctx.send(embed=embed)
+**Method 2: Bulk Claim** (Medium)
+`%claimall`
+• Claim ALL unclaimed quests at once
+• Get **85% of XP** (15% fee)
+• Example: 1000 XP total = 850 XP claimed
+• Convenient when you have many quests
+
+**Method 3: Auto-Claim** (Least XP)
+`%autoclaim on`
+• Automatically claims completed quests
+• Get **70% of XP** (30% fee)
+• Example: 1000 XP total = 700 XP claimed
+• Passive but loses the most XP
+
+**Bonus: Expiration System**
+If you don't claim in time:
+• Daily quests expire after **24 hours**
+• Weekly quests expire after **7 days**
+• Get **10% of XP** (90% lost!)
+
+**💡 Best Strategy:** Manually claim daily quests for 100% rewards!""",
+        inline=False)
+    page4.add_field(
+        name="🌍 UNIQUE QUESTS (Level 11+ Only)",
+        value="""**What are Unique Quests?**
+Special quests that unlock at Level 11 and are required for further progression.
+
+**How They Work:**
+• Each level from 11+ has 1 unique quest requirement
+• Real-life tasks: Take photos, write stories, create art, etc.
+• Text quests auto-approve instantly
+• Photo/voice quests need admin approval
+
+**Commands:**
+• `%uniquequest list` - See available quests
+• `%uniquequest progress` - Check your progress
+• `%uniquequest submit <quest_id>` - Submit proof
+• `%bypassquest` - Skip a quest for 50,000 XP
+
+**Rewards:**
+• XP for completing
+• Lifely Points (cosmetic achievement tracker)
+• Required for leveling past Level 11""",
+        inline=False)
+    pages.append(page4)
+    
+    # PAGE 5: MECHANICS & TIPS
+    page5 = discord.Embed(
+        title="📚 Questuza Guide - Mechanics & Tips (5/5)",
+        description="Learn the mechanics and level up faster",
+        color=discord.Color.orange())
+    page5.add_field(
+        name="🔤 Word Counting Rules",
+        value="""How words are counted for XP:
+• Only **alphabetic words** count (a-z, A-Z)
+• **Numbers and emojis** don't count
+• **Case-insensitive** (Hello = hello)
+• **Duplicate words in same message** count once
+• **Same word across messages** counts each time
+
+Example: "hello hello world 123 😀"
+• hello = 1 unique word
+• world = 1 unique word
+• Total = 2 unique words
+• Numbers/emojis = ignored""",
+        inline=False)
+    page5.add_field(
+        name="🎧 Voice Chat Tracking",
+        value="""How VC time works:
+• **Automatic tracking** - Bot tracks while you're in VC
+• **Max 5 hours per session** - Resets when you leave and rejoin
+• **Accurate to the second** - All time counts
+• Use `%vctest` - Test and verify tracking
+• **Auto-recovery** - Orphaned sessions recovered on bot restart
+
+What counts:
+• Time spent in any voice channel
+• Works even if you're muted/deafened
+• Counts for daily, weekly, and achievement quests""",
+        inline=False)
+    page5.add_field(
+        name="🖼️ Profile Customization",
+        value="""Make your profile unique:
+• `%profile` - View your full profile embed
+• `%banner <url>` - Set a custom banner image
+• `%color <hex>` - Set profile text color (e.g., #FF5733)
+• Shows level, XP, multiplier, cosmetics
+
+Example: `%color #FF0000` (red profile)""",
+        inline=False)
+    page5.add_field(
+        name="⚡ Tips for Fast Leveling",
+        value="""Maximize your XP gains:
+1. **Stack Multipliers** - Complete daily AND weekly quests → 1.35x multiplier
+2. **Chat Everywhere** - Use different channels for Social Butterfly quest
+3. **Voice First** - VC gives 60 XP/min = most XP/time investment
+4. **Unique Words** - Use varied vocabulary for extra XP
+5. **Manual Claims** - Always claim quests individually for 100% XP
+6. **Use %debug** - Check your stats and progress anytime
+7. **Daily Routine** - Complete all 5 daily quests daily (~2000 XP base)
+8. **Weekly Grind** - Finish weekly quests for 11,300 XP/week
+9. **Special Quests** - Long-term goals, work on them steadily
+10. **Track Progress** - Use `%profile` and `%questprogress <id>` often""",
+        inline=False)
+    page5.add_field(
+        name="❓ Useful Commands",
+        value="""Quick reference:
+• `%quests <type>` - View quests (daily/weekly/achievement/special/all)
+• `%questprogress <id>` - Check progress with progress bars
+• `%claim <id>` - Claim single quest (100% XP)
+• `%claimall` - Claim all at once (85% XP)
+• `%profile` - View your profile and stats
+• `%help` - See all available commands
+• `%debug` - Check detailed tracking stats
+• `%guide` - Show this guide again""",
+        inline=False)
+    pages.append(page5)
+    
+    # Send all pages with pagination
+    class GuideView(discord.ui.View):
+        def __init__(self, pages_list):
+            super().__init__()
+            self.pages = pages_list
+            self.current_page = 0
+            self.update_buttons()
+        
+        def update_buttons(self):
+            self.prev_button.disabled = self.current_page == 0
+            self.next_button.disabled = self.current_page == len(self.pages) - 1
+        
+        @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.gray)
+        async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_page = max(0, self.current_page - 1)
+            self.update_buttons()
+            await interaction.response.edit_message(embed=self.pages[self.current_page], view=self)
+        
+        @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.gray)
+        async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_page = min(len(self.pages) - 1, self.current_page + 1)
+            self.update_buttons()
+            await interaction.response.edit_message(embed=self.pages[self.current_page], view=self)
+    
+    await ctx.send(embed=pages[0], view=GuideView(pages))
 
 
 @bot.command(name='admin')
@@ -5983,26 +6174,26 @@ async def study_stop(ctx):
         conn.close()
         return
 
-        session_id, start_time_str, intended_duration, study_type, subject = session_data
-        start_time = datetime.datetime.fromisoformat(start_time_str)
-        actual_duration = int((datetime.datetime.now() - start_time).total_seconds())
-    
-        # Move to history
-        c.execute('''INSERT INTO study_history
-                      (user_id, guild_id, session_id, study_type, subject, mood,
-                       intended_duration, start_time, end_time, actual_duration, completed)
-                      SELECT user_id, guild_id, session_id, study_type, subject, mood,
-                             intended_duration, start_time, ?, ?, 1
-                      FROM study_sessions
-                      WHERE user_id = ? AND guild_id = ?''',
-                  (datetime.datetime.now().isoformat(), actual_duration, ctx.author.id, ctx.guild.id))
-    
-        # Remove from active sessions
-        c.execute('''DELETE FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
-                  (ctx.author.id, ctx.guild.id))
-    
-        conn.commit()
-        conn.close()
+    session_id, start_time_str, intended_duration, study_type, subject = session_data
+    start_time = datetime.datetime.fromisoformat(start_time_str)
+    actual_duration = int((datetime.datetime.now() - start_time).total_seconds())
+
+    # Move to history
+    c.execute('''INSERT INTO study_history
+                  (user_id, guild_id, session_id, study_type, subject, mood,
+                   intended_duration, start_time, end_time, actual_duration, completed)
+                  SELECT user_id, guild_id, session_id, study_type, subject, mood,
+                         intended_duration, start_time, ?, ?, 1
+                  FROM study_sessions
+                  WHERE user_id = ? AND guild_id = ?''',
+              (datetime.datetime.now().isoformat(), actual_duration, ctx.author.id, ctx.guild.id))
+
+    # Remove from active sessions
+    c.execute('''DELETE FROM study_sessions WHERE user_id = ? AND guild_id = ?''',
+              (ctx.author.id, ctx.guild.id))
+
+    conn.commit()
+    conn.close()
 
     # Calculate duration display
     hours = actual_duration // 3600

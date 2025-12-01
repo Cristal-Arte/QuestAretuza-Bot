@@ -248,12 +248,13 @@ ACHIEVEMENT_QUESTS = [
 ]
 
 SPECIAL_QUESTS = [
+    # LEGENDARY TIER - Highest difficulty
     Quest(
         quest_id="special_legendary_1",
         name="Mythical Wordsmith",
         description="Use 25,000 lifetime unique words",
         quest_type=QuestType.SPECIAL,
-        xp_reward=50000,
+        xp_reward=75000,  # Upgraded from 50000
         requirements={"lifetime_words": 25000},
         emoji="🗣️"
     ),
@@ -262,7 +263,7 @@ SPECIAL_QUESTS = [
         name="Eternal Voice",
         description="Spend 500 hours total in voice chat",
         quest_type=QuestType.SPECIAL,
-        xp_reward=75000,
+        xp_reward=112500,  # Upgraded from 75000
         requirements={"total_vc_hours": 500},
         emoji="🎙️"
     ),
@@ -271,7 +272,7 @@ SPECIAL_QUESTS = [
         name="Server Historian",
         description="Send 50,000 total messages",
         quest_type=QuestType.SPECIAL,
-        xp_reward=100000,
+        xp_reward=150000,  # Upgraded from 100000
         requirements={"messages_sent": 50000},
         emoji="📜"
     ),
@@ -280,7 +281,7 @@ SPECIAL_QUESTS = [
         name="Channel Master",
         description="Be active in 100 different channels",
         quest_type=QuestType.SPECIAL,
-        xp_reward=60000,
+        xp_reward=90000,  # Upgraded from 60000
         requirements={"channels_used": 100},
         emoji="🏰"
     ),
@@ -289,16 +290,18 @@ SPECIAL_QUESTS = [
         name="Ultimate Level",
         description="Reach Level 100",
         quest_type=QuestType.SPECIAL,
-        xp_reward=200000,
+        xp_reward=300000,  # Upgraded from 200000
         requirements={"level": 100},
         emoji="👑"
     ),
+    
+    # EPIC TIER - High difficulty
     Quest(
         quest_id="special_epic_1",
         name="Word Collector",
         description="Use 10,000 lifetime unique words",
         quest_type=QuestType.SPECIAL,
-        xp_reward=25000,
+        xp_reward=37500,  # Upgraded from 25000
         requirements={"lifetime_words": 10000},
         emoji="📝"
     ),
@@ -307,7 +310,7 @@ SPECIAL_QUESTS = [
         name="Voice Commander",
         description="Spend 100 hours total in voice chat",
         quest_type=QuestType.SPECIAL,
-        xp_reward=30000,
+        xp_reward=45000,  # Upgraded from 30000
         requirements={"total_vc_hours": 100},
         emoji="🎤"
     ),
@@ -316,7 +319,7 @@ SPECIAL_QUESTS = [
         name="Message Maestro",
         description="Send 10,000 total messages",
         quest_type=QuestType.SPECIAL,
-        xp_reward=35000,
+        xp_reward=52500,  # Upgraded from 35000
         requirements={"messages_sent": 10000},
         emoji="💬"
     ),
@@ -325,7 +328,7 @@ SPECIAL_QUESTS = [
         name="Channel Conqueror",
         description="Be active in 50 different channels",
         quest_type=QuestType.SPECIAL,
-        xp_reward=28000,
+        xp_reward=42000,  # Upgraded from 28000
         requirements={"channels_used": 50},
         emoji="🌍"
     ),
@@ -334,16 +337,18 @@ SPECIAL_QUESTS = [
         name="Level Lord",
         description="Reach Level 50",
         quest_type=QuestType.SPECIAL,
-        xp_reward=50000,
+        xp_reward=75000,  # Upgraded from 50000
         requirements={"level": 50},
         emoji="⚡"
     ),
+    
+    # RARE TIER - Medium-high difficulty
     Quest(
         quest_id="special_rare_1",
         name="Word Warrior",
         description="Use 5,000 lifetime unique words",
         quest_type=QuestType.SPECIAL,
-        xp_reward=15000,
+        xp_reward=22500,  # Upgraded from 15000
         requirements={"lifetime_words": 5000},
         emoji="⚔️"
     ),
@@ -352,7 +357,7 @@ SPECIAL_QUESTS = [
         name="Voice Virtuoso",
         description="Spend 50 hours total in voice chat",
         quest_type=QuestType.SPECIAL,
-        xp_reward=18000,
+        xp_reward=27000,  # Upgraded from 18000
         requirements={"total_vc_hours": 50},
         emoji="🎵"
     ),
@@ -361,7 +366,7 @@ SPECIAL_QUESTS = [
         name="Chat Champion",
         description="Send 5,000 total messages",
         quest_type=QuestType.SPECIAL,
-        xp_reward=20000,
+        xp_reward=30000,  # Upgraded from 20000
         requirements={"messages_sent": 5000},
         emoji="🏆"
     ),
@@ -370,7 +375,7 @@ SPECIAL_QUESTS = [
         name="Channel Explorer",
         description="Be active in 25 different channels",
         quest_type=QuestType.SPECIAL,
-        xp_reward=12000,
+        xp_reward=18000,  # Upgraded from 12000
         requirements={"channels_used": 25},
         emoji="🗺️"
     ),
@@ -379,9 +384,56 @@ SPECIAL_QUESTS = [
         name="Level Legend",
         description="Reach Level 25",
         quest_type=QuestType.SPECIAL,
-        xp_reward=25000,
+        xp_reward=37500,  # Upgraded from 25000
         requirements={"level": 25},
         emoji="⭐"
+    ),
+    
+    # NEW HIGH-TIER SPECIAL QUESTS
+    Quest(
+        quest_id="special_ancient_dragon",
+        name="Ancient Dragon Slayer",
+        description="Reach Level 75",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=125000,  # New super high-tier quest
+        requirements={"level": 75},
+        emoji="🐉"
+    ),
+    Quest(
+        quest_id="special_platinum_voice",
+        name="Platinum Voice Master",
+        description="Spend 250 hours total in voice chat",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=100000,  # New super high-tier quest
+        requirements={"total_vc_hours": 250},
+        emoji="💎"
+    ),
+    Quest(
+        quest_id="special_ultra_wordsmith",
+        name="Ultra Wordsmith",
+        description="Use 15,000 lifetime unique words",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=85000,  # New super high-tier quest
+        requirements={"lifetime_words": 15000},
+        emoji="✨"
+    ),
+    Quest(
+        quest_id="special_million_messages",
+        name="Message Millionaire",
+        description="Send 25,000 total messages",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=95000,  # New super high-tier quest
+        requirements={"messages_sent": 25000},
+        emoji="💰"
+    ),
+    Quest(
+        quest_id="special_channel_emperor",
+        name="Channel Emperor",
+        description="Be active in 75 different channels",
+        quest_type=QuestType.SPECIAL,
+        xp_reward=80000,  # New super high-tier quest
+        requirements={"channels_used": 75},
+        emoji="👸"
     ),
 ]
 
